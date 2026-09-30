@@ -1,0 +1,25 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  rate-limiter:
+    build: ./rate-limiter
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      DOWNSTREAM_URL: ${DOWNSTREAM_URL:-http://httpbin.org}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_DEFAULT_CAPACITY: ${RATE_LIMIT_DEFAULT_CAPACITY:-100}
+      RATE_LIMIT_DEFAULT_REFILL_RATE: ${RATE_LIMIT_DEFAULT_REFILL_RATE:-10}
+      RATE_LIMIT_IDENTIFIER_TYPE: ${RATE_LIMIT_IDENTIFIER_TYPE:-IP}
+      RATE_LIMIT_REDIS_FAILURE_MODE: ${RATE_LIMIT_REDIS_FAILURE_MODE:-FAIL_OPEN}
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy

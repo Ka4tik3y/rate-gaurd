@@ -1,0 +1,22 @@
+spring:
+  application.name: rate-limiter
+  data.redis:
+    host: ${SPRING_DATA_REDIS_HOST:localhost}
+    port: ${SPRING_DATA_REDIS_PORT:6379}
+  cloud.gateway.routes:
+    - id: downstream
+      uri: ${DOWNSTREAM_URL:http://httpbin.org}
+      predicates:
+        - Path=/api/**
+      filters:
+        - StripPrefix=1
+management.endpoints.web.exposure.include: health,prometheus
+rate-limit:
+  enabled: ${RATE_LIMIT_ENABLED:true}
+  default.capacity: ${RATE_LIMIT_DEFAULT_CAPACITY:100}
+  default.refill-rate: ${RATE_LIMIT_DEFAULT_REFILL_RATE:10}
+  identifier.type: ${RATE_LIMIT_IDENTIFIER_TYPE:IP}
+  redis.failure-mode: ${RATE_LIMIT_REDIS_FAILURE_MODE:FAIL_OPEN}
+traffic-metrics:
+  enabled: ${TRAFFIC_METRICS_ENABLED:true}
+  retention-minutes: ${TRAFFIC_METRICS_RETENTION_MINUTES:15}
