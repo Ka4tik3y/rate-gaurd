@@ -28,13 +28,13 @@ public class DefaultRateLimitService implements RateLimitService {
                 p.getDefault().getRefillRate(), p.isEnabled());
         if (!policy.enabled())
             return Mono
-                    .just(new RateLimitDecision(true, policy.capacity(), policy.capacity(), 0, policy.name(), client));
+                    .just(RateLimitDecision.of(true, policy.capacity(), policy.capacity(), 0, policy.name(), client));
         long started = System.nanoTime();
         return repo.consume(policy, client).doOnSuccess(d -> record(d, started)).onErrorResume(error -> {
             metrics.counter("rate_limit_redis_errors_total", "policy", policy.name()).increment();
             log.warn("rate limit Redis operation failed; mode={}", p.getRedis().getFailureMode(), error);
             boolean allowed = p.getRedis().getFailureMode() == RateLimitProperties.FailureMode.FAIL_OPEN;
-            RateLimitDecision d = new RateLimitDecision(allowed, allowed ? policy.capacity() : 0, policy.capacity(),
+            RateLimitDecision d = RateLimitDecision.of(allowed, allowed ? policy.capacity() : 0, policy.capacity(),
                     allowed ? 0 : 1, policy.name(), client);
             record(d, started);
             return Mono.just(d);

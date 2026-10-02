@@ -12,11 +12,17 @@ import com.rateguard.domain.RateLimitPolicy;
 
 import reactor.core.publisher.Mono;
 
+/**
+ * Executes the atomic token-bucket Lua script. The script resolves a per-client override and a
+ * temporary block from Redis itself, so dynamic policy changes applied by the admin/policy layer
+ * take effect without any coordination here, and the whole decision stays a single round trip.
+ */
 @Repository
 public class LuaRedisTokenBucketRepository implements RedisTokenBucketRepository {
 
-    private final ReactiveStringRedisTemplate redis;
+    @SuppressWarnings("rawtypes")
     private final DefaultRedisScript<List> script;
+    private final ReactiveStringRedisTemplate redis;
 
     public LuaRedisTokenBucketRepository(ReactiveStringRedisTemplate redis) {
         this.redis = redis;
@@ -27,12 +33,26 @@ public class LuaRedisTokenBucketRepository implements RedisTokenBucketRepository
 
     @Override
     public Mono<RateLimitDecision> consume(RateLimitPolicy policy, String clientId) {
-        String key = "rl:bucket:{" + policy.name() + "}:" + clientId;
-        return redis.execute(script, List.of(key), Long.toString(policy.capacity()), Double.toString(policy.refillRate()))
-                .single().map(result -> {
-                    List<?> v = (List<?>) result;
-                    boolean allowed = ((Number) v.get(0)).longValue() == 1;
-                    return new RateLimitDecision(allowed, ((Number) v.get(1)).longValue(), policy.capacity(), ((Number) v.get(2)).longValue(), policy.name(), clientId);
-                });
+        List<String> keys = List.of(
+                RedisKeys.bucket(clientId),
+                RedisKeys.override(clientId),
+                RedisKeys.block(clientId));
+        return redis.execute(script, keys, Long.toString(policy.capacity()), Double.toString(policy.refillRate()))
+                .single()
+                .map(result -> toDecision((List<?>) result, policy, clientId));
+    }
+
+    private static RateLimitDecision toDecision(List<?> v, RateLimitPolicy policy, String clientId) {
+        boolean allowed = num(v, 0) == 1;
+        long remaining = num(v, 1);
+        long retryAfter = num(v, 2);
+        boolean blocked = num(v, 4) == 1;
+        long effectiveCapacity = v.size() > 5 ? num(v, 5) : policy.capacity();
+        return new RateLimitDecision(allowed, remaining, effectiveCapacity, retryAfter,
+                policy.name(), clientId, blocked);
+    }
+
+    private static long num(List<?> v, int i) {
+        return ((Number) v.get(i)).longValue();
     }
 }

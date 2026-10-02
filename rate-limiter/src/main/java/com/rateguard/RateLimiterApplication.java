@@ -8,10 +8,18 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import com.rateguard.anomaly.AnomalyProperties;
 import com.rateguard.config.RateLimitProperties;
 import com.rateguard.metrics.MetricsProperties;
+import com.rateguard.policy.AgentProperties;
+import com.rateguard.policy.PolicyGateProperties;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties({RateLimitProperties.class, MetricsProperties.class, AnomalyProperties.class})
+@EnableConfigurationProperties({
+    RateLimitProperties.class,
+    MetricsProperties.class,
+    AnomalyProperties.class,
+    PolicyGateProperties.class,
+    AgentProperties.class
+})
 public class RateLimiterApplication {
 
     public static void main(String[] args) {

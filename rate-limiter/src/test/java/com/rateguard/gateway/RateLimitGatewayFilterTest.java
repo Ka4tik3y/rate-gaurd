@@ -35,7 +35,7 @@ class RateLimitGatewayFilterTest {
     @Test
     void rejectedRequestGets429AndHeaders() {
         ClientIdentifierResolver resolver = e -> "client";
-        RateLimitService service = (c, p) -> Mono.just(new RateLimitDecision(false, 0, 10, 1, "default", c));
+        RateLimitService service = (c, p) -> Mono.just(RateLimitDecision.of(false, 0, 10, 1, "default", c));
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/resource").build());
         new RateLimitGatewayFilter(resolver, service, recorder())
             .filter(exchange, e -> Mono.error(new AssertionError("must not continue"))).block();
@@ -49,7 +49,7 @@ class RateLimitGatewayFilterTest {
 
     @Test
     void allowedRequestContinues() {
-        RateLimitService s = (c, p) -> Mono.just(new RateLimitDecision(true, 9, 10, 0, "default", c));
+        RateLimitService s = (c, p) -> Mono.just(RateLimitDecision.of(true, 9, 10, 0, "default", c));
         var e = MockServerWebExchange.from(MockServerHttpRequest.get("/api/x").build());
         new RateLimitGatewayFilter(x -> "client", s, recorder()).filter(e, x -> Mono.empty()).block();
         assertEquals("9", e.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));

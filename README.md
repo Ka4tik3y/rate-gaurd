@@ -58,3 +58,48 @@ A scheduled sweep (default every 60s, off the request hot path) aggregates each 
 Crossing a threshold emits an `AnomalyEvent` (clientId, metric, current value, baseline, deviation, severity, window, reason) to an `AnomalyEventSink` — a bounded in-memory buffer plus a structured log line. No LLM is involved; the detector only "wakes" on meaningful thresholds. Phase 4's AI agent will consume these events.
 
 Tuning lives under `anomaly:` / `traffic-metrics:` in `application.yml`, all overridable by environment variable (e.g. `ANOMALY_INTERVAL_SECONDS`, `ANOMALY_EVALUATION_WINDOW_MINUTES`, `ANOMALY_REJECT_RATIO_THRESHOLD`, `TRAFFIC_METRICS_ENABLED`).
+
+## Phase 3 — Policy Gate, Admin API, audit log & kill switch
+
+Phase 3 makes limits dynamic and adds the safety layer that will let an AI agent (Phase 4) act without ever touching Redis directly. Limits are now per-client: the token-bucket Lua script atomically reads a `policy:override:{clientId}` and a `policy:block:{clientId}` key, so an adjusted limit or a temporary block takes effect on the very next request — and if every higher layer is down, the limiter still runs on its defaults.
+
+```mermaid
+flowchart LR
+  A[AI agent] -->|POST /agent/actions| PG[Policy Gate]
+  H[Human admin] -->|/admin/**| PG
+  PG -->|validated action| PS[Policy store]
+  PS --> R[(Redis policy:* )]
+  R --> L[Lua token bucket]
+  PG --> AU[(Audit log)]
+  PG -. kill switch / approval .-> PG
+```
+
+**Policy Gate (§20–24)** is the single validated path for every mutation. The only actions are `ADJUST_LIMIT`, `TEMPORARY_BLOCK`, and `ALERT`. For an agent action it enforces, in order: the **kill switch** (agent mutations disabled ⇒ rejected; alerts still flow), an **evidence threshold**, **absolute** capacity bounds and the **±50% automatic-change** cap, a **cooldown**, and a **max-actions-per-window** cap. A `TEMPORARY_BLOCK` of a **HIGH_VALUE** client is never executed automatically — it is held as **PENDING_APPROVAL** until a human approves it. Human admin actions share the same path (and audit) but may exceed the agent-only ±50% cap. Nothing — agent or otherwise — can reach Redis except through this gate.
+
+**Audit log (§25):** every attempt is recorded in Redis (`audit:{clientId}` + `audit:all`) with the trigger, evidence, proposal, gate decision, previous vs applied values (for rollback), and execution result — a concise rationale, never model chain-of-thought.
+
+**Admin API (§35)** is secured with Spring Security HTTP Basic (§34): `/admin/**` requires the `ADMIN` role, the agent's `/agent/actions` requires `AGENT`, while `/api/**` and `/actuator/health` stay public.
+
+| Method & path | Role | Purpose |
+|---|---|---|
+| `GET /admin/rate-limits/{clientId}` | ADMIN | effective limit, block status, classification |
+| `PUT /admin/rate-limits/{clientId}` | ADMIN | set a limit (via the gate) |
+| `POST /admin/rate-limits/{clientId}/block` · `/unblock` | ADMIN | block / unblock |
+| `POST /admin/rate-limits/{clientId}/simulate` | ADMIN | dry-run a limit against recent traffic (read-only) |
+| `PUT /admin/rate-limits/{clientId}/classification` | ADMIN | set NORMAL / HIGH_VALUE |
+| `GET /admin/metrics/{clientId}` | ADMIN | windowed traffic metrics |
+| `GET /admin/audit/{clientId}` | ADMIN | audit trail |
+| `POST /admin/agent/kill-switch` · `GET /admin/agent/status` | ADMIN | toggle / inspect the kill switch |
+| `GET /admin/agent/pending` · `POST /admin/agent/pending/{id}/approve` · `/reject` | ADMIN | high-value approval queue |
+| `POST /agent/actions` | AGENT | the agent proposes an action (always gated) |
+
+Credentials and guardrails are configured under `admin.security:` / `policy-gate:` / `agent:` in `application.yml`, all env-overridable (`ADMIN_USERNAME`/`ADMIN_PASSWORD`, `AGENT_USERNAME`/`AGENT_PASSWORD`, `POLICY_GATE_MAX_CHANGE_RATIO`, `AGENT_ENABLED`, …). **The default credentials are dev-only placeholders — override them in any real deployment.**
+
+Example — an agent proposes a limit change, which the gate validates and applies:
+
+```bash
+curl -u agent:agent -X POST localhost:8080/agent/actions -H 'Content-Type: application/json' -d '{
+  "actionType":"ADJUST_LIMIT","clientId":"203.0.113.9","newCapacity":140,"newRefillRate":14,
+  "trigger":"request_rate_anomaly","reason":"sustained spike",
+  "evidence":{"metric":"request_rate","currentValue":420,"baseline":80,"deviation":4.2,"severity":"HIGH","window":"5m"}}'
+```

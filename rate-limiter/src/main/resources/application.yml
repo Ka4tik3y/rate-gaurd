@@ -33,3 +33,22 @@ anomaly:
   reject-ratio-threshold: ${ANOMALY_REJECT_RATIO_THRESHOLD:0.5}
   error-ratio-threshold: ${ANOMALY_ERROR_RATIO_THRESHOLD:0.2}
   burstiness-threshold: ${ANOMALY_BURSTINESS_THRESHOLD:3.0}
+agent:
+  # Global kill switch default; the live value is held in Redis and toggled via the admin API.
+  enabled: ${AGENT_ENABLED:true}
+policy-gate:
+  max-change-ratio: ${POLICY_GATE_MAX_CHANGE_RATIO:0.5}
+  min-capacity: ${POLICY_GATE_MIN_CAPACITY:1}
+  max-capacity: ${POLICY_GATE_MAX_CAPACITY:100000}
+  max-block-seconds: ${POLICY_GATE_MAX_BLOCK_SECONDS:3600}
+  cooldown-seconds: ${POLICY_GATE_COOLDOWN_SECONDS:60}
+  max-actions-per-window: ${POLICY_GATE_MAX_ACTIONS_PER_WINDOW:10}
+  action-window-seconds: ${POLICY_GATE_ACTION_WINDOW_SECONDS:3600}
+  min-evidence-deviation: ${POLICY_GATE_MIN_EVIDENCE_DEVIATION:2.0}
+admin:
+  security:
+    # Dev-only placeholders. Override via env in any real deployment.
+    admin-username: ${ADMIN_USERNAME:admin}
+    admin-password: ${ADMIN_PASSWORD:admin}
+    agent-username: ${AGENT_USERNAME:agent}
+    agent-password: ${AGENT_PASSWORD:agent}
