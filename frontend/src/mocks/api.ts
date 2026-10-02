@@ -280,8 +280,18 @@ export const mockApi = {
 
   async investigate(input: { clientId: string; metric: string; severity: string; window: string }): Promise<Investigation> {
     await delay(500)
-    const inv = db.investigations[0]
-    return { ...inv, id: `INV-${Math.floor(1000 + Math.random() * 9000)}`, clientId: input.clientId, trigger: input.metric, severity: input.severity as Investigation['severity'], startedAt: Date.now() }
+    const base = db.investigations[0]
+    const inv: Investigation = {
+      ...base,
+      id: `INV-${Math.floor(1000 + Math.random() * 9000)}`,
+      clientId: input.clientId,
+      trigger: input.metric,
+      severity: input.severity as Investigation['severity'],
+      startedAt: Date.now(),
+    }
+    // Persist it so the Investigations list and the "View full investigation" detail page can find it.
+    db.investigations.unshift(inv)
+    return inv
   },
 }
 
