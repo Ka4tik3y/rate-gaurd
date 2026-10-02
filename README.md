@@ -4,7 +4,10 @@
 **Phase 2** adds aggregated traffic metrics and a cheap, deterministic anomaly detector (no LLM).
 **Phase 3** adds dynamic per-client limits, a guardrailed Policy Gate, admin API, audit log, and kill switch.
 **Phase 4** adds the autonomous Python/LangGraph AI agent that investigates anomalies and acts through the gate.
+**Phase 5** adds an offline simulation + evaluation harness that measures static vs AI-assisted adaptive limiting, plus full docs.
 The rate limiter never depends on the AI — if the agent is down, limiting continues on the static policy.
+
+Full design docs live in [`docs/`](docs/): [architecture](docs/architecture.md), [rate-limiter](docs/rate-limiter.md), [agent](docs/agent.md), [security](docs/security.md), [evaluation](docs/evaluation.md).
 
 ```mermaid
 flowchart LR
@@ -145,3 +148,36 @@ curl -X POST localhost:8000/anomalies -H 'Content-Type: application/json' -d '{
   "clientId":"203.0.113.9","metric":"reject_ratio","deviation":4.2,"severity":"HIGH",
   "window":"5m","reason":"sustained 429s with steady traffic"}'
 ```
+
+## Phase 5 — simulation & evaluation harness (static vs adaptive)
+
+A separate, **offline and deterministic** evaluation system (`evaluation/`, driven by
+`ai-agent/app/simulation/`) that answers, with measurements rather than claims (§33):
+*does the adaptive system improve protection without unnecessarily blocking legitimate clients?*
+
+It replays five traffic scenarios (scraper burst, legitimate spike, slow-and-low scanning, noisy
+high-value tenant, 5xx storm) under a **static** limit and under the **AI-assisted adaptive** limit.
+The adaptive arm runs the **real** `HeuristicPlanner` through a faithful mirror of the Phase 2
+detector, the Phase 3 Policy Gate (evidence ≥ 2.0, ±50 % cap, bounds, cooldown, high-value
+approval), and the Phase 4 closed loop (keep / revert). Nothing is hard-coded — every metric falls
+out of the run, and it needs no Redis, no network, and no API key.
+
+```mermaid
+flowchart LR
+  SC[5 scenarios] --> ST[STATIC arm] --> MET[measure]
+  SC --> AD[ADAPTIVE arm: detector -> planner -> gate -> keep/revert] --> MET
+  MET --> REP[results.json + results.md]
+```
+
+```bash
+cd ai-agent
+python -m app.simulation          # prints the report, writes evaluation/results/
+pytest                            # 32 tests (agent + simulation), no network / no API key
+```
+
+Measured per scenario (§32): false blocks, abuse block rate, 5xx served, agent actions / gate
+rejections / pending approvals / alerts / rollbacks, time-to-mitigation, recovery time. Headline
+from the committed run — false blocks on a genuine demand spike **26.3 % → 2.1 %**; slow-and-low
+abuse the static limit misses entirely **0 % → 83.3 % blocked**; a high-value tenant's block held
+**PENDING_APPROVAL**; a 5xx storm correctly **alerted, not throttled**. Full methodology and
+caveats: [`docs/evaluation.md`](docs/evaluation.md); results: [`evaluation/`](evaluation/README.md).
