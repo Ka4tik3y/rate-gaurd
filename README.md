@@ -1,183 +1,229 @@
-# Autonomous AI Rate Limiting & API Protection Platform
+# RateGuard — Autonomous AI Rate Limiting & API Protection Platform
 
-**Phase 1** implements the independently deployable, Redis-backed gateway rate limiter.
-**Phase 2** adds aggregated traffic metrics and a cheap, deterministic anomaly detector (no LLM).
-**Phase 3** adds dynamic per-client limits, a guardrailed Policy Gate, admin API, audit log, and kill switch.
-**Phase 4** adds the autonomous Python/LangGraph AI agent that investigates anomalies and acts through the gate.
-**Phase 5** adds an offline simulation + evaluation harness that measures static vs AI-assisted adaptive limiting, plus full docs.
-The rate limiter never depends on the AI — if the agent is down, limiting continues on the static policy.
+> A system that protects an API from being overwhelmed or abused — and uses an AI agent to tune
+> that protection automatically, **safely**, and in a way you can always audit, override, or switch off.
 
-Full design docs live in [`docs/`](docs/): [architecture](docs/architecture.md), [rate-limiter](docs/rate-limiter.md), [agent](docs/agent.md), [security](docs/security.md), [evaluation](docs/evaluation.md).
+This README is written for someone seeing the project for the first time. It explains, in plain
+language, **what the system does, what every term means, how the pieces work together, and why each
+piece exists.** Deeper, more technical docs live in [`docs/`](docs/).
+
+---
+
+## 1. What problem does this solve?
+
+Public APIs get hammered — by honest traffic spikes, by buggy clients, and by abusers (scrapers,
+credential-stuffing bots, people scanning for vulnerabilities). If you let every request through,
+your service falls over. If you clamp down too hard, you block real customers.
+
+**Rate limiting** is the standard defense: cap how many requests each client may make. But a *fixed*
+cap is a blunt instrument — it over-blocks real demand and under-reacts to novel abuse.
+
+**RateGuard** keeps a fast, reliable rate limiter in front of your API **and** adds an AI agent that
+watches traffic, spots anomalies, and adjusts the limits for you — raising them for legitimate demand,
+clamping down on abuse — while a strict safety layer makes sure the AI can never do anything reckless.
+
+**The golden rule:** the rate limiter never depends on the AI. If the agent is turned off or crashes,
+the limiter keeps running on its last known settings. The AI is an *enhancement*, never a dependency.
+
+---
+
+## 2. Glossary — every term, in plain English
+
+| Term | What it means | Why it matters |
+|---|---|---|
+| **API gateway** | A server that sits in front of your real API; every request passes through it first. | One place to enforce rules (like rate limits) for all traffic. |
+| **Rate limiting** | Capping how many requests a client can make in a period of time. | Stops any one client from overwhelming the service. |
+| **Client** | Whoever is making requests — identified here by IP address. | Limits and anomalies are tracked *per client*. |
+| **Token bucket** | The algorithm used to rate-limit. Imagine a bucket that holds up to *N* tokens and refills at a steady rate; each request spends one token; no token → request refused. | Allows short bursts (up to the bucket size) while enforcing a steady average rate — fairer than a hard counter. |
+| **Capacity** | The bucket size — the biggest burst a client can make at once. | Bigger = more burst allowed. |
+| **Refill rate** | How many tokens are added per second — the sustained request rate allowed. | Sets the long-term allowed throughput. |
+| **429** | The HTTP status code "Too Many Requests" — what a client gets when rate-limited. | A 429 means the limiter blocked that request (not an error in your app). |
+| **5xx** | HTTP server-error codes (500–599) from the backend service. | High 5xx means *your service* is failing, not that a client is abusing it. |
+| **Redis** | A fast in-memory datastore. | Holds the token buckets and traffic counters so multiple gateway copies share one source of truth, with microsecond latency. |
+| **Lua script** | A tiny program run *inside* Redis. | Lets the limiter refill-and-consume a token in one atomic step, so two gateways can’t double-spend the same token. |
+| **Anomaly** | Traffic that deviates from normal (a sudden spike, a flood of 429s, endpoint scanning, a 5xx storm). | The trigger that wakes the AI agent. |
+| **EWMA / z-score** | Cheap statistics. EWMA = a rolling average that weights recent data more; z-score = how many standard deviations the current value is from that average. | Lets the system flag "unusually high" without any AI — fast and free. |
+| **Policy** | The rate-limit settings for a client (capacity + refill rate), or a temporary block. | What the agent/admin actually changes. |
+| **Policy Gate** | A guarded checkpoint that **every** policy change must pass through. | The safety layer: it validates, bounds, audits, and can reject any change — this is what makes the AI safe to run. |
+| **Guardrail** | A hard limit on what a change may do (e.g. "never change a limit by more than ±50%"). | The AI (or a buggy admin) literally cannot exceed these. |
+| **Kill switch** | A single global on/off switch for all autonomous AI actions. | Instant "stop the AI" button; the limiter keeps working. |
+| **Audit log** | A permanent record of every anomaly, decision, and action. | Accountability — you can always see *what* changed, *why*, and *who/what* did it. |
+| **AI agent** | The autonomous program that investigates anomalies and proposes actions. | Does the tuning a human would otherwise do manually, 24/7. |
+| **LLM** | Large Language Model (e.g. Claude) — the "reasoning" brain the agent can use. | Optional: explains causes and picks actions. The agent also works without one, using fixed rules. |
+| **Heuristic planner** | A deterministic rule-set the agent uses when no LLM key is configured. | The whole system runs and is testable with **no API key and no cost**. |
+| **Closed loop** | Act → measure the result → keep it if it helped, undo it if it didn’t. | The agent verifies its own work and automatically rolls back mistakes. |
+| **Simulation (dry run)** | Replaying recent traffic against a proposed limit *without changing anything*. | "What would happen if…?" — lets the agent check a change before making it. |
+| **Backend-for-frontend (BFF)** | A small server that sits between the dashboard and the core services. | Keeps admin passwords off the browser and turns per-client APIs into the views the dashboard needs. |
+
+---
+
+## 3. The services — what each one is and the benefit it provides
+
+RateGuard is five cooperating pieces (plus Redis and a test echo server). Each runs in its own
+container.
+
+| Service | What it is | What it does | Benefit it provides | Port |
+|---|---|---|---|---|
+| **rate-limiter** (Java / Spring Cloud Gateway) | The API gateway on the request hot path. | Resolves the client, applies the token-bucket limit (via Redis+Lua), forwards allowed requests to your API, returns `429` otherwise; records traffic metrics; runs the deterministic anomaly detector. | Fast, reliable protection that works **on its own**, independent of the AI. | 8080 |
+| **ai-agent** (Python / FastAPI / LangGraph) | The autonomous operator, off the hot path. | Investigates an anomaly, inspects metrics, simulates a fix, proposes an action, and verifies the outcome. | Automates limit tuning and abuse response; explains its reasoning; reverts its own mistakes. | 8000 |
+| **Policy Gate** (inside rate-limiter) | The single validated path for changes. | Checks every proposed change against guardrails, enforces the kill switch and human approval, applies it, and writes the audit entry. | Makes autonomous action **safe** — the AI can never touch settings directly or exceed limits. | — |
+| **dashboard** (BFF + React UI) | The web control panel. | Serves the UI and aggregates the real services into live views; lets you generate test traffic and trigger investigations. | A single place to **see and test** the whole system without the command line. | 8090 |
+| **redis** | In-memory datastore. | Stores token buckets, per-client metrics, policy overrides/blocks, and the kill-switch flag. | Shared, microsecond-fast state so the limiter scales horizontally. | 6379 |
+| **httpbin** | A local echo server. | Stands in for "your real API" as the forwarding target. | Lets you demo safely without sending traffic to the public internet. | internal |
+
+---
+
+## 4. How it works
+
+### 4a. A normal request (the fast path)
 
 ```mermaid
 flowchart LR
-  C[Client] --> G[Spring Cloud Gateway filter]
-  G --> I[IP client resolver]
-  I --> S[Rate limit service]
-  S --> L[Atomic Redis Lua token bucket]
-  G --> D[Downstream route]
-  G -. fire-and-forget .-> M[Traffic metrics in Redis]
-  SCHED[Scheduled sweep] --> AGG[Metrics aggregator]
-  AGG --> DET[EWMA / z-score + threshold rules]
-  DET --> SINK[Anomaly event sink]
+  C[Client] --> G[Gateway]
+  G --> L{Token bucket in Redis\nhas a token?}
+  L -- yes --> D[Forward to your API] --> R1[Response]
+  L -- no --> R2[429 Too Many Requests]
+  G -. record metrics, fire-and-forget .-> M[(Redis metrics)]
 ```
 
-Each `rl:bucket:{default}:{clientId}` Redis hash holds `tokens` and `timestamp`. One Lua invocation uses Redis server time, refills and caps the bucket, consumes a token if available, sets expiry, and returns the decision atomically. This permits multiple gateway instances to share exactly one bucket.
+Every request hits the **gateway**. The gateway asks the **token bucket** (one atomic Lua call in
+Redis): *does this client have a token?* If yes, the request is forwarded and a token is spent; if
+no, the client gets a **429**. Traffic is recorded to Redis "fire-and-forget" — recording can never
+slow down or break the actual limit decision. If Redis is unreachable, the limiter follows a
+configured fail mode (fail-open = allow, fail-closed = block).
 
-## Run
+### 4b. When something looks wrong (the smart path)
 
-```powershell
+A scheduled sweep aggregates each client's recent traffic and runs **deterministic** detectors
+(EWMA/z-score + threshold rules — no AI, so it’s cheap and always on). When a threshold is crossed,
+it emits an **anomaly**. The **AI agent** then runs this loop:
+
+```mermaid
+flowchart LR
+  A[Anomaly] --> I[Investigate: read metrics + baseline + policy]
+  I --> P[Decide a cause and one action]
+  P --> S[Simulate the fix - dry run]
+  S --> G[Policy Gate validates]
+  G -- approved --> X[Apply the change]
+  X --> O[Observe the result]
+  O --> K{Did it help?}
+  K -- yes --> Keep[Keep]
+  K -- no --> Rev[Revert]
+  G -- rejected / needs approval --> Stop[No change]
+```
+
+The agent only ever **proposes**; the **Policy Gate** decides. The possible actions are limited to:
+*adjust a limit*, *temporarily block a client*, or *raise an alert*.
+
+### 4c. The safety layer (why you can trust the AI)
+
+Every change — whether from the AI or a human admin — passes the **Policy Gate**, which enforces, in
+order:
+
+1. **Kill switch** — if autonomous actions are off, AI changes are rejected (alerts still flow).
+2. **Evidence** — the anomaly must be strong enough to act on.
+3. **Bounds & the ±50% cap** — a limit can’t be changed by more than ±50% automatically, and never
+   outside absolute min/max.
+4. **Cooldown & rate cap** — no rapid-fire changes to the same client.
+5. **Human approval** — blocking a *high-value* client is never automatic; it waits for a person.
+
+Every attempt is written to the **audit log** (what was proposed, the evidence, the decision, the
+before/after values). Nothing — AI or otherwise — can reach Redis except through this gate.
+
+---
+
+## 5. The dashboard
+
+Open **http://localhost:8090** after starting the stack (below). It’s a read-and-control panel:
+
+- **Overview** — live request volume, allowed vs rate-limited, active anomalies, KPIs.
+- **Test Console** — *generate traffic* as a client and watch it get rate-limited; *trigger an
+  investigation* and watch the agent decide → gate → act → verify.
+- **Clients / Traffic / Policies** — per-client metrics, limits, and risk.
+- **Agent / Investigations / Policy Gate** — what the AI did, each investigation’s full workflow, and
+  the guardrails + recent decisions.
+- **Simulation** — dry-run a proposed limit against real recent traffic.
+- **Audit / Evaluation / Health** — the record of events, static-vs-adaptive results, and service
+  status (including a demo of "agent offline, limiter still healthy").
+
+The dashboard talks only to a small **BFF**, which holds the admin credentials server-side — they are
+never exposed to the browser.
+
+---
+
+## 6. Quick start
+
+**Prerequisites:** Docker (and Docker Compose). Nothing else needed — no Java, Node, Python, or API key.
+
+```bash
 docker compose up --build
 ```
 
-Or start Redis locally, then:
+That starts everything: `redis`, `rate-limiter` (:8080), `ai-agent` (:8000), `dashboard` (:8090), and
+a local `httpbin` echo target. Then:
 
-```powershell
-cd rate-limiter
-mvn clean test
-mvn clean package
-mvn spring-boot:run
-```
+- Open the dashboard: **http://localhost:8090**
+- Or hit the gateway directly: `curl -H "X-Forwarded-For: me" http://localhost:8080/api/get`
 
-The sample `/api/**` gateway route forwards to `DOWNSTREAM_URL` (default `http://httpbin.org`). Configure `RATE_LIMIT_DEFAULT_CAPACITY`, `RATE_LIMIT_DEFAULT_REFILL_RATE`, `RATE_LIMIT_ENABLED`, and `RATE_LIMIT_REDIS_FAILURE_MODE` (`FAIL_OPEN` or `FAIL_CLOSED`) through environment variables.
+By default the AI uses the **deterministic heuristic planner** (no API key, no cost). To use Claude
+instead, set `ANTHROPIC_API_KEY` in your environment before `up`.
 
-## Load tests
+> **Credentials:** the admin/agent logins default to `admin/admin` and `agent/agent`. These are
+> **development placeholders** — override them with environment variables for any real use.
 
-Install [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) and run one scenario from `load-tests/scenarios`, e.g. `k6 run load-tests/scenarios/same-client-contention.js`. The scenarios report request throughput, latency, and 429s. They expect the gateway on port 8080.
+---
 
-Metrics are exposed by Actuator at `/actuator/prometheus`: `rate_limit_requests_total`, `rate_limit_allowed_total`, `rate_limit_rejected_total`, `rate_limit_redis_errors_total`, and `rate_limit_latency`. Tags are bounded to policy and result only — endpoint and client identifiers are deliberately kept out of Micrometer to avoid high-cardinality tag explosion; per-endpoint/per-client detail lives in the aggregated Redis traffic metrics (Phase 2) instead.
+## 7. Try it (2 minutes)
 
-## Phase 2 — traffic metrics & deterministic anomaly detection
+1. Go to **Test Console** → **Generate traffic** for `demo-1` with ~200 requests. You’ll see some
+   **allowed** and some **429** (the bucket ran out) — that’s the limiter working.
+2. Go to **Test Console** → **Trigger an investigation** for `demo-1` (anomaly type *Sustained 429s*).
+   The agent investigates and (because traffic is steady, not bursty) proposes **raising the limit**,
+   the **Policy Gate** approves it, and the agent **verifies** the result.
+3. Check **Investigations** for the full step-by-step workflow, **Policy Gate** for the decision, and
+   **Audit** for the permanent record.
+4. Flip the **kill switch** on the Agent page and trigger again — the gate now **rejects** the AI’s
+   change, while traffic keeps flowing. That’s the safety guarantee in action.
 
-On every `/api/**` request the gateway records an outcome (requests, 429s, 5xx, latency, endpoint) into Redis **fire-and-forget**, so metric collection can never slow or break the rate-limit decision. State lives under the `metric:*` namespace, entirely separate from the `rl:*` rate-limit state, and is aggregated into per-minute buckets with a TTL — no request is stored forever.
+---
 
-- `metric:req:{clientId}:{minute}` — hash of `requests` / `rate_limited` / `errors` / `latency_ms`
-- `metric:endpoints:{clientId}:{minute}` — HyperLogLog of distinct endpoints (union via `PFCOUNT`)
-- `metric:active` — sorted set of clients by last-seen second, used to find who to evaluate
+## 8. Project layout
 
-A scheduled sweep (default every 60s, off the request hot path) aggregates each active client's recent traffic into **1/5/10-minute windows** — request rate, 429 ratio, error ratio, average latency, unique endpoints, and burstiness (peak-minute / mean-minute) — and runs two deterministic strategies:
+| Folder | What’s in it |
+|---|---|
+| [`rate-limiter/`](rate-limiter/) | The Java gateway: token-bucket limiter, metrics, anomaly detector, Policy Gate, admin API, audit log, kill switch. |
+| [`ai-agent/`](ai-agent/) | The Python agent: LangGraph investigation workflow, tools, LLM/heuristic planners, and the Phase 5 offline simulation + evaluation harness (`app/simulation/`). |
+| [`dashboard-bff/`](dashboard-bff/) | The FastAPI backend-for-frontend that serves the UI and bridges it to the real services. |
+| [`frontend/`](frontend/) | The React + TypeScript dashboard UI. |
+| [`evaluation/`](evaluation/) | Traffic scenarios and measured static-vs-adaptive results. |
+| [`load-tests/`](load-tests/) | k6 load-test scenarios for the limiter. |
+| [`docs/`](docs/) | Deep-dive docs (below). |
 
-- **EWMA + z-score** baseline detector for request-rate spikes (flags upward deviations past a z-score threshold after a warm-up period).
-- **Threshold rules** for conditions anomalous in absolute terms: 429 surge, 5xx surge, burstiness, and slow-and-low endpoint scanning (low rate but wide endpoint spread). Ratio rules require a minimum sample size to avoid small-sample noise.
+---
 
-Crossing a threshold emits an `AnomalyEvent` (clientId, metric, current value, baseline, deviation, severity, window, reason) to an `AnomalyEventSink` — a bounded in-memory buffer plus a structured log line. No LLM is involved; the detector only "wakes" on meaningful thresholds. Phase 4's AI agent will consume these events.
+## 9. Deeper documentation
 
-Tuning lives under `anomaly:` / `traffic-metrics:` in `application.yml`, all overridable by environment variable (e.g. `ANOMALY_INTERVAL_SECONDS`, `ANOMALY_EVALUATION_WINDOW_MINUTES`, `ANOMALY_REJECT_RATIO_THRESHOLD`, `TRAFFIC_METRICS_ENABLED`).
+- [docs/architecture.md](docs/architecture.md) — the whole system, request flow, component responsibilities.
+- [docs/rate-limiter.md](docs/rate-limiter.md) — the token bucket, Redis layout, failure modes, config.
+- [docs/agent.md](docs/agent.md) — the agent workflow, tools, closed loop, LLM provider.
+- [docs/security.md](docs/security.md) — roles, the Policy Gate, kill switch, approvals, audit, secrets.
+- [docs/evaluation.md](docs/evaluation.md) — how we measure that the AI actually helps.
+- [docs/api-contract.md](docs/api-contract.md) — the API the dashboard expects from the backend.
 
-## Phase 3 — Policy Gate, Admin API, audit log & kill switch
+---
 
-Phase 3 makes limits dynamic and adds the safety layer that will let an AI agent (Phase 4) act without ever touching Redis directly. Limits are now per-client: the token-bucket Lua script atomically reads a `policy:override:{clientId}` and a `policy:block:{clientId}` key, so an adjusted limit or a temporary block takes effect on the very next request — and if every higher layer is down, the limiter still runs on its defaults.
+## 10. How it was built (phases)
 
-```mermaid
-flowchart LR
-  A[AI agent] -->|POST /agent/actions| PG[Policy Gate]
-  H[Human admin] -->|/admin/**| PG
-  PG -->|validated action| PS[Policy store]
-  PS --> R[(Redis policy:* )]
-  R --> L[Lua token bucket]
-  PG --> AU[(Audit log)]
-  PG -. kill switch / approval .-> PG
-```
+The system was built in five tested phases, each self-contained:
 
-**Policy Gate (§20–24)** is the single validated path for every mutation. The only actions are `ADJUST_LIMIT`, `TEMPORARY_BLOCK`, and `ALERT`. For an agent action it enforces, in order: the **kill switch** (agent mutations disabled ⇒ rejected; alerts still flow), an **evidence threshold**, **absolute** capacity bounds and the **±50% automatic-change** cap, a **cooldown**, and a **max-actions-per-window** cap. A `TEMPORARY_BLOCK` of a **HIGH_VALUE** client is never executed automatically — it is held as **PENDING_APPROVAL** until a human approves it. Human admin actions share the same path (and audit) but may exceed the agent-only ±50% cap. Nothing — agent or otherwise — can reach Redis except through this gate.
+1. **Phase 1** — the Redis-backed token-bucket rate limiter (the standalone fast path).
+2. **Phase 2** — traffic metrics + the cheap, deterministic anomaly detector (no AI).
+3. **Phase 3** — dynamic per-client limits, the Policy Gate, admin API, audit log, kill switch (the safety layer).
+4. **Phase 4** — the autonomous Python/LangGraph AI agent that investigates and acts through the gate.
+5. **Phase 5** — an offline simulation + evaluation harness that *measures* static vs AI-assisted limiting.
 
-**Audit log (§25):** every attempt is recorded in Redis (`audit:{clientId}` + `audit:all`) with the trigger, evidence, proposal, gate decision, previous vs applied values (for rollback), and execution result — a concise rationale, never model chain-of-thought.
+(The dashboard and its BFF were added on top to make the whole system usable and testable from a browser.)
 
-**Admin API (§35)** is secured with Spring Security HTTP Basic (§34): `/admin/**` requires the `ADMIN` role, the agent's `/agent/actions` requires `AGENT`, while `/api/**` and `/actuator/health` stay public.
-
-| Method & path | Role | Purpose |
-|---|---|---|
-| `GET /admin/rate-limits/{clientId}` | ADMIN | effective limit, block status, classification |
-| `PUT /admin/rate-limits/{clientId}` | ADMIN | set a limit (via the gate) |
-| `POST /admin/rate-limits/{clientId}/block` · `/unblock` | ADMIN | block / unblock |
-| `POST /admin/rate-limits/{clientId}/simulate` | ADMIN | dry-run a limit against recent traffic (read-only) |
-| `PUT /admin/rate-limits/{clientId}/classification` | ADMIN | set NORMAL / HIGH_VALUE |
-| `GET /admin/metrics/{clientId}` | ADMIN | windowed traffic metrics |
-| `GET /admin/audit/{clientId}` | ADMIN | audit trail |
-| `POST /admin/agent/kill-switch` · `GET /admin/agent/status` | ADMIN | toggle / inspect the kill switch |
-| `GET /admin/agent/pending` · `POST /admin/agent/pending/{id}/approve` · `/reject` | ADMIN | high-value approval queue |
-| `POST /agent/actions` | AGENT | the agent proposes an action (always gated) |
-
-Credentials and guardrails are configured under `admin.security:` / `policy-gate:` / `agent:` in `application.yml`, all env-overridable (`ADMIN_USERNAME`/`ADMIN_PASSWORD`, `AGENT_USERNAME`/`AGENT_PASSWORD`, `POLICY_GATE_MAX_CHANGE_RATIO`, `AGENT_ENABLED`, …). **The default credentials are dev-only placeholders — override them in any real deployment.**
-
-Example — an agent proposes a limit change, which the gate validates and applies:
-
-```bash
-curl -u agent:agent -X POST localhost:8080/agent/actions -H 'Content-Type: application/json' -d '{
-  "actionType":"ADJUST_LIMIT","clientId":"203.0.113.9","newCapacity":140,"newRefillRate":14,
-  "trigger":"request_rate_anomaly","reason":"sustained spike",
-  "evidence":{"metric":"request_rate","currentValue":420,"baseline":80,"deviation":4.2,"severity":"HIGH","window":"5m"}}'
-```
-
-## Phase 4 — the autonomous AI agent (Python / FastAPI / LangGraph)
-
-`ai-agent/` is a separate, independently deployable service. It is strictly off the request hot path: if it is down, the Java rate limiter keeps working on its static policy (architectural rules 1 & 12). It reaches the Java side only over HTTP using the **AGENT** role, so it can read context and propose actions but can never touch Redis or an admin endpoint — every mutation goes through `POST /agent/actions` → Policy Gate (rules 2–4).
-
-```mermaid
-flowchart LR
-  AE[AnomalyEvent] --> A[FastAPI /anomalies]
-  A --> W[LangGraph workflow]
-  W -->|read| J[Java AGENT API: metrics / policy / audit / simulate]
-  W -->|LLM or heuristic| P[Plan: cause + candidate action]
-  W -->|propose| G[Policy Gate]
-  G --> O[observe outcome] --> KV{improved?}
-  KV -->|yes| K[keep]
-  KV -->|no| R[revert]
-```
-
-**LangGraph state machine (§27):** inspect metrics → inspect baseline → inspect policy → determine cause → generate action → simulate → validate → **policy gate** → observe outcome → evaluate outcome → **keep / revert** → finalize. The closed loop (§30–31) re-reads metrics after an adjustment, compares the 429 ratio before vs after, and automatically **reverts** a change that made things worse.
-
-**Tools (§28):** `get_client_metrics`, `get_historical_metrics`, `get_current_policy`, `get_client_classification`, `get_action_history`, `simulate_policy_change`, `propose_rate_limit_change`, `propose_temporary_block`, `send_alert` — the `propose_*`/`send_alert` tools all call the gate; none touch Redis.
-
-**LLM provider abstraction:** `AGENT_LLM_PROVIDER=auto` uses **Claude** (`AGENT_ANTHROPIC_MODEL`, default `claude-opus-5-5`) when `ANTHROPIC_API_KEY` is set, otherwise a **deterministic heuristic planner** so the whole agent runs and is fully testable with no API key. If the LLM call fails or returns malformed output, the agent takes **no action** (the static policy stands, §24).
-
-Run it:
-
-```bash
-# whole stack (rate limiter + redis + agent)
-docker compose up --build        # agent on :8000, gateway on :8080
-
-# or locally
-cd ai-agent && python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --port 8000
-pytest                            # 13 tests, no network / no API key needed
-
-# hand the agent an anomaly to investigate
-curl -X POST localhost:8000/anomalies -H 'Content-Type: application/json' -d '{
-  "clientId":"203.0.113.9","metric":"reject_ratio","deviation":4.2,"severity":"HIGH",
-  "window":"5m","reason":"sustained 429s with steady traffic"}'
-```
-
-## Phase 5 — simulation & evaluation harness (static vs adaptive)
-
-A separate, **offline and deterministic** evaluation system (`evaluation/`, driven by
-`ai-agent/app/simulation/`) that answers, with measurements rather than claims (§33):
-*does the adaptive system improve protection without unnecessarily blocking legitimate clients?*
-
-It replays five traffic scenarios (scraper burst, legitimate spike, slow-and-low scanning, noisy
-high-value tenant, 5xx storm) under a **static** limit and under the **AI-assisted adaptive** limit.
-The adaptive arm runs the **real** `HeuristicPlanner` through a faithful mirror of the Phase 2
-detector, the Phase 3 Policy Gate (evidence ≥ 2.0, ±50 % cap, bounds, cooldown, high-value
-approval), and the Phase 4 closed loop (keep / revert). Nothing is hard-coded — every metric falls
-out of the run, and it needs no Redis, no network, and no API key.
-
-```mermaid
-flowchart LR
-  SC[5 scenarios] --> ST[STATIC arm] --> MET[measure]
-  SC --> AD[ADAPTIVE arm: detector -> planner -> gate -> keep/revert] --> MET
-  MET --> REP[results.json + results.md]
-```
-
-```bash
-cd ai-agent
-python -m app.simulation          # prints the report, writes evaluation/results/
-pytest                            # 32 tests (agent + simulation), no network / no API key
-```
-
-Measured per scenario (§32): false blocks, abuse block rate, 5xx served, agent actions / gate
-rejections / pending approvals / alerts / rollbacks, time-to-mitigation, recovery time. Headline
-from the committed run — false blocks on a genuine demand spike **26.3 % → 2.1 %**; slow-and-low
-abuse the static limit misses entirely **0 % → 83.3 % blocked**; a high-value tenant's block held
-**PENDING_APPROVAL**; a 5xx storm correctly **alerted, not throttled**. Full methodology and
-caveats: [`docs/evaluation.md`](docs/evaluation.md); results: [`evaluation/`](evaluation/README.md).
+### A note on the toolchain
+The frontend is built on **Node 20 LTS** (inside Docker). If you build it directly on a machine with
+Node 25+, the bundler can hang — use Node 20/22 or the provided Docker build.

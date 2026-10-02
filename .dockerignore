@@ -1,0 +1,11 @@
+# Keep the dashboard-bff build context (repo root) small and clean.
+**/node_modules
+**/target
+**/.venv
+**/dist
+**/__pycache__
+**/*.tsbuildinfo
+**/.pytest_cache
+**/.vite
+.git
+**/._*

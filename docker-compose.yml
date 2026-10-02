@@ -1,4 +1,10 @@
 services:
+  # A local echo service that /api/** forwards to, so the demo never sends traffic to the public
+  # internet. Not published — only reachable inside the compose network.
+  httpbin:
+    image: mccutchen/go-httpbin:latest
+    expose:
+      - "8080"
   redis:
     image: redis:7-alpine
     ports:
@@ -12,7 +18,7 @@ services:
     build: ./rate-limiter
     environment:
       SPRING_DATA_REDIS_HOST: redis
-      DOWNSTREAM_URL: ${DOWNSTREAM_URL:-http://httpbin.org}
+      DOWNSTREAM_URL: ${DOWNSTREAM_URL:-http://httpbin:8080}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_DEFAULT_CAPACITY: ${RATE_LIMIT_DEFAULT_CAPACITY:-100}
       RATE_LIMIT_DEFAULT_REFILL_RATE: ${RATE_LIMIT_DEFAULT_REFILL_RATE:-10}
@@ -35,6 +41,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      httpbin:
+        condition: service_started
   ai-agent:
     build: ./ai-agent
     environment:
@@ -50,3 +58,17 @@ services:
       - "8000:8000"
     depends_on:
       - rate-limiter
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard-bff/Dockerfile
+    environment:
+      BFF_GATEWAY_BASE_URL: http://rate-limiter:8080
+      BFF_AGENT_BASE_URL: http://ai-agent:8000
+      BFF_ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      BFF_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+    ports:
+      - "8090:8090"
+    depends_on:
+      - rate-limiter
+      - ai-agent

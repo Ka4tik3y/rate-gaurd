@@ -1,0 +1,20 @@
+// Central query-key registry so caches are consistent and invalidation is easy.
+export const qk = {
+  kpis: ['kpis'] as const,
+  endpoints: ['endpoints'] as const,
+  traffic: (range: string) => ['traffic', range] as const,
+  anomalies: ['anomalies'] as const,
+  clients: (opts: unknown) => ['clients', opts] as const,
+  client: (id: string) => ['client', id] as const,
+  policies: ['policies'] as const,
+  agentStatus: ['agent', 'status'] as const,
+  agentEvents: ['agent', 'events'] as const,
+  investigations: ['investigations'] as const,
+  investigation: (id: string) => ['investigation', id] as const,
+  audit: (opts: unknown) => ['audit', opts] as const,
+  evaluations: ['evaluations'] as const,
+  health: ['health'] as const,
+  gateConfig: ['gate', 'config'] as const,
+  gateDecisions: ['gate', 'decisions'] as const,
+  pending: ['gate', 'pending'] as const,
+}
