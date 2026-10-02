@@ -20,3 +20,16 @@ rate-limit:
 traffic-metrics:
   enabled: ${TRAFFIC_METRICS_ENABLED:true}
   retention-minutes: ${TRAFFIC_METRICS_RETENTION_MINUTES:15}
+  windows: ${TRAFFIC_METRICS_WINDOWS:1,5,10}
+anomaly:
+  enabled: ${ANOMALY_ENABLED:true}
+  interval-seconds: ${ANOMALY_INTERVAL_SECONDS:60}
+  active-window-minutes: ${ANOMALY_ACTIVE_WINDOW_MINUTES:10}
+  evaluation-window-minutes: ${ANOMALY_EVALUATION_WINDOW_MINUTES:5}
+  ewma-alpha: ${ANOMALY_EWMA_ALPHA:0.2}
+  z-threshold: ${ANOMALY_Z_THRESHOLD:3.0}
+  high-z-threshold: ${ANOMALY_HIGH_Z_THRESHOLD:5.0}
+  warmup-samples: ${ANOMALY_WARMUP_SAMPLES:5}
+  reject-ratio-threshold: ${ANOMALY_REJECT_RATIO_THRESHOLD:0.5}
+  error-ratio-threshold: ${ANOMALY_ERROR_RATIO_THRESHOLD:0.2}
+  burstiness-threshold: ${ANOMALY_BURSTINESS_THRESHOLD:3.0}
