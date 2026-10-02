@@ -35,3 +35,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+  ai-agent:
+    build: ./ai-agent
+    environment:
+      AGENT_GATEWAY_BASE_URL: http://rate-limiter:8080
+      AGENT_GATEWAY_USERNAME: ${AGENT_USERNAME:-agent}
+      AGENT_GATEWAY_PASSWORD: ${AGENT_PASSWORD:-agent}
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-auto}
+      AGENT_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AGENT_ANTHROPIC_MODEL: ${AGENT_ANTHROPIC_MODEL:-claude-opus-5-5}
+      AGENT_OUTCOME_WAIT_SECONDS: ${AGENT_OUTCOME_WAIT_SECONDS:-10}
+      AGENT_EVALUATION_WINDOW_MINUTES: ${AGENT_EVALUATION_WINDOW_MINUTES:-5}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - rate-limiter

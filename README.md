@@ -2,7 +2,9 @@
 
 **Phase 1** implements the independently deployable, Redis-backed gateway rate limiter.
 **Phase 2** adds aggregated traffic metrics and a cheap, deterministic anomaly detector (no LLM).
-Later AI phases are deliberately not present — the rate limiter never depends on them.
+**Phase 3** adds dynamic per-client limits, a guardrailed Policy Gate, admin API, audit log, and kill switch.
+**Phase 4** adds the autonomous Python/LangGraph AI agent that investigates anomalies and acts through the gate.
+The rate limiter never depends on the AI — if the agent is down, limiting continues on the static policy.
 
 ```mermaid
 flowchart LR
@@ -102,4 +104,44 @@ curl -u agent:agent -X POST localhost:8080/agent/actions -H 'Content-Type: appli
   "actionType":"ADJUST_LIMIT","clientId":"203.0.113.9","newCapacity":140,"newRefillRate":14,
   "trigger":"request_rate_anomaly","reason":"sustained spike",
   "evidence":{"metric":"request_rate","currentValue":420,"baseline":80,"deviation":4.2,"severity":"HIGH","window":"5m"}}'
+```
+
+## Phase 4 — the autonomous AI agent (Python / FastAPI / LangGraph)
+
+`ai-agent/` is a separate, independently deployable service. It is strictly off the request hot path: if it is down, the Java rate limiter keeps working on its static policy (architectural rules 1 & 12). It reaches the Java side only over HTTP using the **AGENT** role, so it can read context and propose actions but can never touch Redis or an admin endpoint — every mutation goes through `POST /agent/actions` → Policy Gate (rules 2–4).
+
+```mermaid
+flowchart LR
+  AE[AnomalyEvent] --> A[FastAPI /anomalies]
+  A --> W[LangGraph workflow]
+  W -->|read| J[Java AGENT API: metrics / policy / audit / simulate]
+  W -->|LLM or heuristic| P[Plan: cause + candidate action]
+  W -->|propose| G[Policy Gate]
+  G --> O[observe outcome] --> KV{improved?}
+  KV -->|yes| K[keep]
+  KV -->|no| R[revert]
+```
+
+**LangGraph state machine (§27):** inspect metrics → inspect baseline → inspect policy → determine cause → generate action → simulate → validate → **policy gate** → observe outcome → evaluate outcome → **keep / revert** → finalize. The closed loop (§30–31) re-reads metrics after an adjustment, compares the 429 ratio before vs after, and automatically **reverts** a change that made things worse.
+
+**Tools (§28):** `get_client_metrics`, `get_historical_metrics`, `get_current_policy`, `get_client_classification`, `get_action_history`, `simulate_policy_change`, `propose_rate_limit_change`, `propose_temporary_block`, `send_alert` — the `propose_*`/`send_alert` tools all call the gate; none touch Redis.
+
+**LLM provider abstraction:** `AGENT_LLM_PROVIDER=auto` uses **Claude** (`AGENT_ANTHROPIC_MODEL`, default `claude-opus-5-5`) when `ANTHROPIC_API_KEY` is set, otherwise a **deterministic heuristic planner** so the whole agent runs and is fully testable with no API key. If the LLM call fails or returns malformed output, the agent takes **no action** (the static policy stands, §24).
+
+Run it:
+
+```bash
+# whole stack (rate limiter + redis + agent)
+docker compose up --build        # agent on :8000, gateway on :8080
+
+# or locally
+cd ai-agent && python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --port 8000
+pytest                            # 13 tests, no network / no API key needed
+
+# hand the agent an anomaly to investigate
+curl -X POST localhost:8000/anomalies -H 'Content-Type: application/json' -d '{
+  "clientId":"203.0.113.9","metric":"reject_ratio","deviation":4.2,"severity":"HIGH",
+  "window":"5m","reason":"sustained 429s with steady traffic"}'
 ```

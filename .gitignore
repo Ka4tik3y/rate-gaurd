@@ -2,3 +2,9 @@
 **/target/
 .idea/
 *.iml
+
+# Python / ai-agent
+**/.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/

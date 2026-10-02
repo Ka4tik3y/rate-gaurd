@@ -1,50 +1,104 @@
 package com.rateguard.admin;
 
+import java.util.List;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.rateguard.admin.dto.Dtos.AgentActionRequest;
 import com.rateguard.admin.dto.Dtos.EvidenceDto;
 import com.rateguard.admin.dto.Dtos.GateResponse;
+import com.rateguard.admin.dto.Dtos.MetricsView;
+import com.rateguard.admin.dto.Dtos.RateLimitView;
+import com.rateguard.admin.dto.Dtos.SimulateRequest;
+import com.rateguard.audit.AuditEntry;
+import com.rateguard.audit.AuditLog;
+import com.rateguard.metrics.MetricsAggregator;
+import com.rateguard.metrics.MetricsProperties;
 import com.rateguard.policy.ActionEvidence;
 import com.rateguard.policy.ActionSource;
-import com.rateguard.policy.ProposedAction;
 import com.rateguard.policy.PolicyGate;
+import com.rateguard.policy.PolicyStore;
+import com.rateguard.policy.ProposedAction;
+import com.rateguard.policy.SimulationResult;
+import com.rateguard.policy.SimulationService;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * The agent's only entry point for proposing an action (spec §20, §28). Every request is forced to
- * {@link ActionSource#AGENT} and funnelled through the {@link PolicyGate}; there is no path from here
- * to Redis or to the policy store, so the agent can never bypass the gate or mutate state directly
- * (architectural rules 2 & 4). Secured to the AGENT role.
+ * The agent's entire surface (spec §28). Read endpoints let the agent inspect metrics, the current
+ * policy/classification, audit history, and run read-only simulations; the single mutation entry
+ * point ({@code POST /agent/actions}) is forced to {@link ActionSource#AGENT} and funnelled through
+ * the {@link PolicyGate}. There is no path from here to Redis or the policy store, so the agent can
+ * never bypass the gate or mutate state directly (architectural rules 2 & 4). Secured to AGENT.
  */
 @RestController
 @RequestMapping("/agent")
 public class AgentController {
 
   private final PolicyGate gate;
+  private final PolicyStore store;
+  private final MetricsAggregator aggregator;
+  private final MetricsProperties metricsProperties;
+  private final SimulationService simulation;
+  private final AuditLog auditLog;
 
-  public AgentController(PolicyGate gate) {
+  public AgentController(PolicyGate gate, PolicyStore store, MetricsAggregator aggregator,
+                        MetricsProperties metricsProperties, SimulationService simulation, AuditLog auditLog) {
     this.gate = gate;
+    this.store = store;
+    this.aggregator = aggregator;
+    this.metricsProperties = metricsProperties;
+    this.simulation = simulation;
+    this.auditLog = auditLog;
   }
 
   @PostMapping("/actions")
   public Mono<GateResponse> propose(@RequestBody AgentActionRequest req) {
     ProposedAction action = new ProposedAction(
-        req.actionType(),
-        ActionSource.AGENT,
-        req.clientId(),
-        req.trigger(),
-        req.reason(),
-        toEvidence(req.evidence()),
-        req.newCapacity(),
-        req.newRefillRate(),
-        req.blockSeconds(),
-        req.alertMessage());
+        req.actionType(), ActionSource.AGENT, req.clientId(), req.trigger(), req.reason(),
+        toEvidence(req.evidence()), req.newCapacity(), req.newRefillRate(),
+        req.blockSeconds(), req.alertMessage());
     return gate.evaluate(action).map(AdminController::toResponse);
+  }
+
+  @GetMapping("/metrics/{clientId}")
+  public Flux<MetricsView> metrics(@PathVariable String clientId) {
+    return Flux.fromIterable(metricsProperties.getWindows())
+        .concatMap(w -> aggregator.window(clientId, w))
+        .map(m -> new MetricsView(m.clientId(), m.minutes(), m.requests(), m.rejected(), m.errors(),
+            m.requestRatePerMinute(), m.rejectedRatio(), m.errorRatio(), m.avgLatencyMillis(),
+            m.uniqueEndpoints(), m.burstiness()));
+  }
+
+  @GetMapping("/policy/{clientId}")
+  public Mono<RateLimitView> policy(@PathVariable String clientId) {
+    return Mono.zip(
+            store.effectivePolicy(clientId),
+            store.isBlocked(clientId),
+            store.blockTtlSeconds(clientId),
+            store.classification(clientId))
+        .map(t -> new RateLimitView(clientId, t.getT1().name(), t.getT1().capacity(),
+            t.getT1().refillRate(), t.getT2(), t.getT3(), t.getT4()));
+  }
+
+  @GetMapping("/audit/{clientId}")
+  public Mono<List<AuditEntry>> audit(@PathVariable String clientId,
+                                      @RequestParam(defaultValue = "20") int limit) {
+    return auditLog.recent(clientId, limit);
+  }
+
+  @PostMapping("/simulate/{clientId}")
+  public Mono<SimulationResult> simulate(@PathVariable String clientId, @RequestBody SimulateRequest req) {
+    int window = req.windowMinutes() != null ? req.windowMinutes() : 10;
+    long capacity = req.capacity() != null ? req.capacity() : 0;
+    return simulation.simulate(clientId, capacity, req.refillRate(), window);
   }
 
   private static ActionEvidence toEvidence(EvidenceDto e) {
