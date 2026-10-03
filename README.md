@@ -1,5 +1,7 @@
 # RateGuard — Autonomous AI Rate Limiting & API Protection Platform
 
+[![CI](https://github.com/Ka4tik3y/rate-gaurd/actions/workflows/ci.yml/badge.svg)](https://github.com/Ka4tik3y/rate-gaurd/actions/workflows/ci.yml)
+
 > A system that protects an API from being overwhelmed or abused — and uses an AI agent to tune
 > that protection automatically, **safely**, and in a way you can always audit, override, or switch off.
 
