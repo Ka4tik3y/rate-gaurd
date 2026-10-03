@@ -2,6 +2,7 @@ package com.rateguard.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -43,7 +44,20 @@ class RateLimitGatewayFilterTest {
         assertEquals("10", exchange.getResponse().getHeaders().getFirst("X-RateLimit-Limit"));
         assertEquals("0", exchange.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));
         assertEquals("1", exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+        assertNull(exchange.getResponse().getHeaders().getFirst(RateLimitGatewayFilter.BLOCKED_HEADER));
         assertEquals(1, repo.recorded.size());
+        assertTrue(repo.recorded.get(0).rateLimited());
+    }
+
+    @Test
+    void blockedClientGets429WithBlockedHeaderAndRemainingSeconds() {
+        RateLimitService service = (c, p) -> Mono.just(new RateLimitDecision(false, 0, 100, 287, "default", c, true));
+        var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/resource").build());
+        new RateLimitGatewayFilter(e -> "client", service, recorder())
+            .filter(exchange, e -> Mono.error(new AssertionError("blocked client must not reach downstream"))).block();
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, exchange.getResponse().getStatusCode());
+        assertEquals("true", exchange.getResponse().getHeaders().getFirst(RateLimitGatewayFilter.BLOCKED_HEADER));
+        assertEquals("287", exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER));
         assertTrue(repo.recorded.get(0).rateLimited());
     }
 

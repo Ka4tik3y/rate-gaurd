@@ -45,6 +45,11 @@ public class PolicyGate {
     this.mapper = mapper;
   }
 
+  /** The highest capacity the agent may set on its own (see {@link PolicyGateProperties#getAgentMaxCapacity()}). */
+  public long agentMaxCapacity() {
+    return props.getAgentMaxCapacity();
+  }
+
   public Mono<PolicyGateResult> evaluate(ProposedAction action) {
     String id = UUID.randomUUID().toString();
 
@@ -86,7 +91,11 @@ public class PolicyGate {
     if (agent && inCooldown) {
       return reject(id, action, List.of("client in cooldown: wait " + props.getCooldownSeconds() + "s between actions"), current);
     }
-    if (agent && actionsInWindow >= props.getMaxActionsPerWindow()) {
+    // The hourly cap stops the agent flip-flopping a client's limit. It does not apply to blocks: a
+    // block is the protective action, expires on its own and is still bounded by the cooldown and
+    // the max duration — a client that keeps attacking must stay blockable.
+    if (agent && action.actionType() == ActionType.ADJUST_LIMIT
+        && actionsInWindow >= props.getMaxActionsPerWindow()) {
       return reject(id, action,
           List.of("action-rate exceeded: max " + props.getMaxActionsPerWindow() + " per "
               + props.getActionWindowSeconds() + "s"), current);
@@ -111,20 +120,47 @@ public class PolicyGate {
           List.of("capacity " + newCapacity + " outside absolute bounds ["
               + props.getMinCapacity() + ", " + props.getMaxCapacity() + "]"), current);
     }
-    if (agent) {
-      long lower = (long) Math.floor(current.capacity() * (1 - props.getMaxChangeRatio()));
-      long upper = (long) Math.ceil(current.capacity() * (1 + props.getMaxChangeRatio()));
-      if (newCapacity < lower || newCapacity > upper) {
-        return reject(id, action,
-            List.of("change from " + current.capacity() + " to " + newCapacity
-                + " exceeds max automatic change of ±" + (int) (props.getMaxChangeRatio() * 100)
-                + "% (allowed [" + lower + ", " + upper + "])"), current);
-      }
+    if (!agent) {
+      // Admin limits are deliberate and permanent.
+      return applyLimit(id, action, current, newCapacity, newRefill, store.setLimit(action.clientId(), newCapacity, newRefill),
+          List.of("within bounds"));
     }
 
-    return store.setLimit(action.clientId(), newCapacity, newRefill)
+    long lower = (long) Math.floor(current.capacity() * (1 - props.getMaxChangeRatio()));
+    long upper = (long) Math.ceil(current.capacity() * (1 + props.getMaxChangeRatio()));
+    if (newCapacity < lower || newCapacity > upper) {
+      return reject(id, action,
+          List.of("change from " + current.capacity() + " to " + newCapacity
+              + " exceeds max automatic change of ±" + (int) (props.getMaxChangeRatio() * 100)
+              + "% (allowed [" + lower + ", " + upper + "])"), current);
+    }
+    boolean increase = newCapacity > current.capacity();
+    if (increase && newCapacity > props.getAgentMaxCapacity()) {
+      return reject(id, action,
+          List.of("capacity " + newCapacity + " above the agent ceiling of " + props.getAgentMaxCapacity()
+              + "; only an admin can raise it further"), current);
+    }
+    Mono<Boolean> recentlyBlocked = increase ? store.recentlyBlocked(action.clientId()) : Mono.just(false);
+    return recentlyBlocked.flatMap(blocked -> {
+      if (blocked) {
+        return reject(id, action,
+            List.of("client was blocked in the last " + props.getBlockMemorySeconds() / 60
+                + " min; the agent will not raise its limit"), current);
+      }
+      // Agent limits are temporary: they lapse back to the default instead of compounding forever.
+      long ttl = props.getAgentOverrideTtlSeconds();
+      return applyLimit(id, action, current, newCapacity, newRefill,
+          store.setLimit(action.clientId(), newCapacity, newRefill, ttl),
+          List.of("within bounds", "expires in " + ttl / 60 + " min"));
+    });
+  }
+
+  private Mono<PolicyGateResult> applyLimit(String id, ProposedAction action, RateLimitPolicy current,
+                                            long newCapacity, double newRefill, Mono<Void> write,
+                                            List<String> reasons) {
+    return write
         .then(store.recordAction(action.clientId(), props.getCooldownSeconds(), props.getActionWindowSeconds()))
-        .then(audit(entry(id, action, GateDecision.APPROVED, List.of("within bounds"), current,
+        .then(audit(entry(id, action, GateDecision.APPROVED, reasons, current,
             newCapacity, newRefill, null, SUCCESS)))
         .thenReturn(new PolicyGateResult(GateDecision.APPROVED, id, List.of("applied"),
             newCapacity, newRefill, null))
@@ -144,6 +180,7 @@ public class PolicyGate {
     }
 
     return store.block(action.clientId(), seconds)
+        .then(store.rememberBlock(action.clientId(), props.getBlockMemorySeconds()))
         .then(store.recordAction(action.clientId(), props.getCooldownSeconds(), props.getActionWindowSeconds()))
         .then(audit(entry(id, action, GateDecision.APPROVED, List.of("block applied"), current,
             null, null, seconds, SUCCESS)))
@@ -173,6 +210,7 @@ public class PolicyGate {
           ProposedAction action = deserialize(json);
           return store.effectivePolicy(action.clientId()).flatMap(current ->
               store.block(action.clientId(), action.blockSeconds())
+                  .then(store.rememberBlock(action.clientId(), props.getBlockMemorySeconds()))
                   .then(store.recordAction(action.clientId(), props.getCooldownSeconds(), props.getActionWindowSeconds()))
                   .then(store.deletePending(actionId))
                   .then(audit(entry(actionId, action, GateDecision.APPROVED,
@@ -208,6 +246,24 @@ public class PolicyGate {
         .then(audit(entry(id, action, GateDecision.APPROVED, List.of("block lifted"), null,
             null, null, 0L, SUCCESS)))
         .thenReturn(new PolicyGateResult(GateDecision.APPROVED, id, List.of("unblocked"), null, null, 0L));
+  }
+
+  /**
+   * Admin-only: drop the client's limit override so it goes back to the default policy. Audited as
+   * an ADJUST_LIMIT to the default capacity.
+   */
+  public Mono<PolicyGateResult> adminResetLimit(String clientId, String reason) {
+    String id = UUID.randomUUID().toString();
+    return store.effectivePolicy(clientId).flatMap(before -> store.clearLimit(clientId)
+        .then(store.effectivePolicy(clientId))
+        .flatMap(after -> {
+          ProposedAction action = ProposedAction.adjustLimit(ActionSource.ADMIN, clientId, after.capacity(),
+              after.refillRate(), "admin", reason == null || reason.isBlank() ? "reset to default limit" : reason, null);
+          return audit(entry(id, action, GateDecision.APPROVED, List.of("override removed"), before,
+              after.capacity(), after.refillRate(), null, SUCCESS))
+              .thenReturn(new PolicyGateResult(GateDecision.APPROVED, id, List.of("reset to default"),
+                  after.capacity(), after.refillRate(), null));
+        }));
   }
 
   // ---- helpers ----

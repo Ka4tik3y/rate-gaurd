@@ -8,7 +8,7 @@ import { InvestigationTimeline } from '@/components/domain/InvestigationTimeline
 import { EvidencePanel } from '@/components/domain/EvidencePanel'
 import { SimulationComparison } from '@/components/charts/SimulationComparison'
 import { pct } from '@/lib/format'
-import type { Investigation } from '@/types'
+import type { Investigation, InvestigationAnalysis } from '@/types'
 
 export default function InvestigationDetail() {
   const { id = '' } = useParams()
@@ -47,6 +47,8 @@ export default function InvestigationDetail() {
               </Card>
 
               <div className="space-y-4 lg:col-span-2">
+                {i.analysis?.summary && <AnalysisCard analysis={i.analysis} />}
+
                 <Card>
                   <CardHeader title="Evidence" subtitle="Concise detector evidence (no hidden reasoning)" />
                   <EvidencePanel evidence={i.evidence} />
@@ -98,6 +100,30 @@ function ResultBox({ title, value, reasons }: { title: string; value: string; re
         <StatusBadge value={value} />
       </div>
       {reasons && reasons.length > 0 && <div className="mt-2 text-xs text-muted">{reasons.join('; ')}</div>}
+    </Card>
+  )
+}
+
+
+function AnalysisCard({ analysis }: { analysis: InvestigationAnalysis }) {
+  const ai = !analysis.planner.startsWith('heuristic')
+  return (
+    <Card>
+      <CardHeader
+        title={ai ? 'AI analysis' : 'Playbook analysis'}
+        subtitle={`${analysis.planner || 'planner'} · confidence ${Math.round(analysis.confidence * 100)}%`}
+      />
+      <p className="text-sm leading-relaxed text-fg">{analysis.summary}</p>
+      {analysis.observations.length > 0 && (
+        <ul className="mt-3 space-y-1.5 border-t border-border pt-3">
+          {analysis.observations.map((o, n) => (
+            <li key={n} className="flex gap-2 font-mono text-xs text-muted">
+              <span className="text-faint">—</span>
+              {o}
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   )
 }

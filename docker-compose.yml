@@ -32,6 +32,10 @@ services:
       POLICY_GATE_MAX_CHANGE_RATIO: ${POLICY_GATE_MAX_CHANGE_RATIO:-0.5}
       POLICY_GATE_MAX_BLOCK_SECONDS: ${POLICY_GATE_MAX_BLOCK_SECONDS:-3600}
       POLICY_GATE_COOLDOWN_SECONDS: ${POLICY_GATE_COOLDOWN_SECONDS:-60}
+      # Agent guardrails: ceiling on agent-raised limits, agent limits expire, blocks are remembered.
+      POLICY_GATE_AGENT_MAX_CAPACITY: ${POLICY_GATE_AGENT_MAX_CAPACITY:-500}
+      POLICY_GATE_AGENT_OVERRIDE_TTL_SECONDS: ${POLICY_GATE_AGENT_OVERRIDE_TTL_SECONDS:-1800}
+      POLICY_GATE_BLOCK_MEMORY_SECONDS: ${POLICY_GATE_BLOCK_MEMORY_SECONDS:-1800}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       AGENT_USERNAME: ${AGENT_USERNAME:-agent}
@@ -52,6 +56,9 @@ services:
       AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-auto}
       AGENT_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AGENT_ANTHROPIC_MODEL: ${AGENT_ANTHROPIC_MODEL:-claude-opus-5-5}
+      # Google Gemini: put GEMINI_API_KEY in the (gitignored) .env file next to this compose file.
+      AGENT_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AGENT_GEMINI_MODEL: ${AGENT_GEMINI_MODEL:-gemini-3.5-flash}
       AGENT_OUTCOME_WAIT_SECONDS: ${AGENT_OUTCOME_WAIT_SECONDS:-10}
       AGENT_EVALUATION_WINDOW_MINUTES: ${AGENT_EVALUATION_WINDOW_MINUTES:-5}
       # Autopilot: the agent polls the detector's anomalies and investigates them on its own.
@@ -71,6 +78,7 @@ services:
       BFF_AGENT_BASE_URL: http://ai-agent:8000
       BFF_ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       BFF_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      BFF_DEFAULT_CAPACITY: ${RATE_LIMIT_DEFAULT_CAPACITY:-100}
     ports:
       - "8090:8090"
     depends_on:

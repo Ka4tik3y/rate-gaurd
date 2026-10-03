@@ -7,34 +7,39 @@
   html, body, #root { height: 100%; }
   body {
     @apply bg-bg text-fg font-sans antialiased;
-    font-feature-settings: 'cv02', 'cv03', 'cv04';
+    /* Faint paper grain for the dusty, printed feel */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.3 0 0 0 0 0.22 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
+  h1, h2 { @apply font-display; letter-spacing: -0.01em; }
+  ::selection { background: rgba(154, 115, 52, 0.25); }
+  input[type="range"], input[type="checkbox"], input[type="radio"] { accent-color: #3a342b; }
   *:focus-visible {
-    @apply outline-none ring-2 ring-info ring-offset-2 ring-offset-bg;
+    @apply outline-none ring-2 ring-muted/60 ring-offset-2 ring-offset-bg;
   }
 }
 
 @layer components {
   .card {
     @apply bg-surface border border-border rounded-xl;
+    box-shadow: 3px 3px 0 rgba(107, 98, 82, 0.12);
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
            transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
   }
-  .btn-primary { @apply btn bg-info text-white hover:bg-info/90; }
+  .btn-primary { @apply btn bg-ink text-surface hover:bg-ink/90; }
   .btn-ghost { @apply btn bg-surface-2 text-fg border border-border hover:bg-surface-3; }
-  .btn-danger { @apply btn bg-danger text-white hover:bg-danger/90; }
+  .btn-danger { @apply btn bg-danger text-surface hover:bg-danger/90; }
   .input {
     @apply w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-fg
-           placeholder:text-faint focus:border-info;
+           placeholder:text-faint focus:border-muted;
   }
-  .th { @apply text-left text-2xs font-semibold uppercase tracking-wider text-muted px-3 py-2.5; }
+  .th { @apply text-left font-mono text-2xs font-medium uppercase tracking-wider text-muted px-3 py-2.5; }
   .td { @apply px-3 py-2.5 text-sm border-t border-border/70; }
 }
 
 /* Subtle scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #d7dbe1; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #c3c9d2; }
+::-webkit-scrollbar-thumb { background: #cfc3a8; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #b9ab8d; }
 ::-webkit-scrollbar-track { background: transparent; }

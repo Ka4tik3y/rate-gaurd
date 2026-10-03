@@ -20,6 +20,28 @@ async def test_steady_high_reject_raises_limit():
     assert d.new_capacity and d.new_capacity > 100
 
 
+async def test_raise_is_clamped_to_the_agent_ceiling():
+    policy = {**normal_policy(), "capacity": 450, "refillRate": 45.0, "agentMaxCapacity": 500}
+    d = await PLANNER.plan(anomaly("reject_ratio"), window(reject=0.6, burst=1.2), policy)
+    assert d.action_type == "ADJUST_LIMIT"
+    assert d.new_capacity == 500
+    assert d.new_refill_rate == 50.0
+
+
+async def test_at_the_ceiling_alerts_instead_of_raising():
+    policy = {**normal_policy(), "capacity": 500, "refillRate": 50.0, "agentMaxCapacity": 500}
+    d = await PLANNER.plan(anomaly("reject_ratio"), window(reject=0.6, burst=1.2), policy)
+    assert d.action_type == "ALERT"
+
+
+async def test_recently_blocked_client_is_blocked_not_rewarded():
+    # The reported bug: unblock, then flood steadily -> the agent used to raise the limit.
+    policy = {**normal_policy(), "recentlyBlocked": True}
+    for metric in ("reject_ratio", "request_rate"):
+        d = await PLANNER.plan(anomaly(metric), window(reject=0.6, burst=1.2), policy)
+        assert d.action_type == "TEMPORARY_BLOCK"
+
+
 async def test_bursty_high_reject_blocks():
     d = await PLANNER.plan(anomaly("request_rate"), window(reject=0.6, burst=6.0), normal_policy())
     assert d.action_type == "TEMPORARY_BLOCK"

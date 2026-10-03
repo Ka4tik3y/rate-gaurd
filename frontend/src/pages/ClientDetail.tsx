@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
-import { useClient } from '@/api/clientsApi'
+import { ArrowLeft, RotateCcw } from 'lucide-react'
+import { useClient, useResetClientLimit } from '@/api/clientsApi'
+import { useToast } from '@/components/ui/Toaster'
 import { PageHeader, Card, CardHeader } from '@/components/ui/Card'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { DataTable, type Column } from '@/components/ui/DataTable'
@@ -29,6 +30,13 @@ function Stat({ label, value }: { label: string; value: string }) {
 export default function ClientDetail() {
   const { clientId = '' } = useParams()
   const client = useClient(clientId)
+  const reset = useResetClientLimit(clientId)
+  const { toast } = useToast()
+  const resetLimit = () =>
+    reset.mutate(undefined, {
+      onSuccess: () => toast(`${clientId} is back on the default limit`, 'success'),
+      onError: (e) => toast((e as Error).message, 'error'),
+    })
 
   return (
     <div>
@@ -72,7 +80,24 @@ export default function ClientDetail() {
                   <Row k="Status" v={<StatusBadge value={c.policy.status} />} />
                   <Row k="Last modified" v={`${timeAgo(c.policy.lastModified)}`} />
                   <Row k="Modified by" v={<StatusBadge value={c.policy.modifiedBy} tone={c.policy.modifiedBy === 'Agent' ? 'info' : 'neutral'} />} />
+                  {c.policy.overridden && (
+                    <Row
+                      k="Custom limit"
+                      v={
+                        (c.policy.expiresInSeconds ?? -1) > 0
+                          ? `expires in ${Math.ceil((c.policy.expiresInSeconds ?? 0) / 60)} min`
+                          : 'permanent'
+                      }
+                    />
+                  )}
+                  {c.policy.recentlyBlocked && <Row k="Recently blocked" v="agent won't raise limit" />}
                 </dl>
+                {c.policy.overridden && (
+                  <button className="btn-ghost mt-4 w-full text-xs" onClick={resetLimit} disabled={reset.isPending}>
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    {reset.isPending ? 'Resetting…' : `Reset to default limit${c.policy.defaultCapacity ? ` (${c.policy.defaultCapacity})` : ''}`}
+                  </button>
+                )}
               </Card>
               <Card className="lg:col-span-2">
                 <CardHeader title="Recent actions" subtitle="Policy changes affecting this client" />

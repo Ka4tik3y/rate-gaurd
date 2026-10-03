@@ -2,6 +2,7 @@ package com.rateguard.admin;
 
 import java.util.List;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -72,13 +73,7 @@ public class AdminController {
 
   @GetMapping("/rate-limits/{clientId}")
   public Mono<RateLimitView> getRateLimit(@PathVariable String clientId) {
-    return Mono.zip(
-            store.effectivePolicy(clientId),
-            store.isBlocked(clientId),
-            store.blockTtlSeconds(clientId),
-            store.classification(clientId))
-        .map(t -> new RateLimitView(clientId, t.getT1().name(), t.getT1().capacity(),
-            t.getT1().refillRate(), t.getT2(), t.getT3(), t.getT4()));
+    return RateLimitView.of(clientId, store, gate.agentMaxCapacity());
   }
 
   @PutMapping("/rate-limits/{clientId}")
@@ -95,6 +90,12 @@ public class AdminController {
         "admin", req.reason() == null ? "admin block" : req.reason(), null,
         null, null, req.seconds(), null);
     return gate.evaluate(action).map(AdminController::toResponse);
+  }
+
+  /** Reset the client to the default limit (removes any admin or agent override). */
+  @DeleteMapping("/rate-limits/{clientId}")
+  public Mono<GateResponse> resetRateLimit(@PathVariable String clientId) {
+    return gate.adminResetLimit(clientId, null).map(AdminController::toResponse);
   }
 
   @PostMapping("/rate-limits/{clientId}/unblock")

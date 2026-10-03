@@ -102,6 +102,13 @@ export interface ClientPolicy {
   status: string
   lastModified: number
   modifiedBy: string
+  /** A custom (admin or agent) limit is in place instead of the default. */
+  overridden?: boolean
+  /** Seconds until an agent-set limit lapses back to the default; -1 = permanent. */
+  expiresInSeconds?: number
+  /** Blocked within the block-memory window — the agent won't raise this client's limit. */
+  recentlyBlocked?: boolean
+  defaultCapacity?: number
 }
 
 export interface ClientAction {
@@ -179,6 +186,16 @@ export interface Investigation {
   simulation?: SimulationResult
   gateDecision: GateDecision
   gateReasons: string[]
+  /** The planner's write-up: an LLM's analysis, or the rule-based playbook's short note. */
+  analysis?: InvestigationAnalysis
+}
+
+export interface InvestigationAnalysis {
+  planner: string
+  summary: string
+  observations: string[]
+  cause: string
+  confidence: number
 }
 
 export interface AgentStatus {

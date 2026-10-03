@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { config } from '@/config'
 import { http } from '@/lib/http'
 import { mockApi } from '@/mocks/api'
@@ -35,6 +35,23 @@ export function useClients(opts: ClientQuery) {
     queryKey: qk.clients(opts),
     queryFn: () => listClients(opts),
     refetchInterval: config.pollIntervalMs,
+  })
+}
+
+// Drop any custom limit so the client goes back to the default (audited by the gateway).
+export async function resetClientLimit(id: string): Promise<unknown> {
+  if (config.useMocks) return mockApi.resetLimit(id)
+  return http<unknown>(config.apiBaseUrl, `/api/admin/clients/${encodeURIComponent(id)}/reset-limit`, { method: 'POST' })
+}
+
+export function useResetClientLimit(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => resetClientLimit(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.client(id) })
+      qc.invalidateQueries({ queryKey: qk.clients({}) })
+    },
   })
 }
 

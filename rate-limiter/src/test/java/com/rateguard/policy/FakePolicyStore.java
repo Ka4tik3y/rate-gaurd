@@ -19,6 +19,9 @@ public class FakePolicyStore implements PolicyStore {
   public final Set<String> cooldown = ConcurrentHashMap.newKeySet();
   public final Map<String, Long> actionCounts = new ConcurrentHashMap<>();
   public final Map<String, String> pending = new ConcurrentHashMap<>();
+  /** clientId -> override TTL in seconds (absent = permanent). */
+  public final Map<String, Long> overrideTtls = new ConcurrentHashMap<>();
+  public final Set<String> recentlyBlocked = ConcurrentHashMap.newKeySet();
 
   private final long defaultCapacity;
   private final double defaultRefill;
@@ -37,12 +40,37 @@ public class FakePolicyStore implements PolicyStore {
   @Override
   public Mono<Void> setLimit(String clientId, long capacity, double refillRate) {
     overrides.put(clientId, new RateLimitPolicy("override", capacity, refillRate, true));
+    overrideTtls.remove(clientId);
     return Mono.empty();
+  }
+
+  @Override
+  public Mono<Void> setLimit(String clientId, long capacity, double refillRate, long ttlSeconds) {
+    overrides.put(clientId, new RateLimitPolicy("override", capacity, refillRate, true));
+    overrideTtls.put(clientId, ttlSeconds);
+    return Mono.empty();
+  }
+
+  @Override
+  public Mono<Long> overrideTtlSeconds(String clientId) {
+    return Mono.just(overrideTtls.getOrDefault(clientId, -1L));
+  }
+
+  @Override
+  public Mono<Void> rememberBlock(String clientId, long seconds) {
+    recentlyBlocked.add(clientId);
+    return Mono.empty();
+  }
+
+  @Override
+  public Mono<Boolean> recentlyBlocked(String clientId) {
+    return Mono.just(recentlyBlocked.contains(clientId));
   }
 
   @Override
   public Mono<Void> clearLimit(String clientId) {
     overrides.remove(clientId);
+    overrideTtls.remove(clientId);
     return Mono.empty();
   }
 

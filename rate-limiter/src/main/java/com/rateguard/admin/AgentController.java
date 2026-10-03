@@ -93,13 +93,7 @@ public class AgentController {
 
   @GetMapping("/policy/{clientId}")
   public Mono<RateLimitView> policy(@PathVariable String clientId) {
-    return Mono.zip(
-            store.effectivePolicy(clientId),
-            store.isBlocked(clientId),
-            store.blockTtlSeconds(clientId),
-            store.classification(clientId))
-        .map(t -> new RateLimitView(clientId, t.getT1().name(), t.getT1().capacity(),
-            t.getT1().refillRate(), t.getT2(), t.getT3(), t.getT4()));
+    return RateLimitView.of(clientId, store, gate.agentMaxCapacity());
   }
 
   @GetMapping("/audit/{clientId}")

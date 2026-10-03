@@ -13,7 +13,9 @@ router = APIRouter()
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "llm_provider": settings.resolved_provider()}
+    provider = settings.resolved_provider()
+    model = {"anthropic": settings.anthropic_model, "gemini": settings.gemini_model}.get(provider, "")
+    return {"status": "ok", "llm_provider": f"{provider}:{model}" if model else provider}
 
 
 @router.post("/anomalies", response_model=InvestigationResult)

@@ -31,19 +31,28 @@ class Gateway:
         r.raise_for_status()
         return _maybe_json(r)
 
+    async def delete_admin(self, path: str) -> Any:
+        r = await self._http.delete(f"{settings.gateway_base_url}{path}", auth=self._auth)
+        r.raise_for_status()
+        return _maybe_json(r)
+
     async def put_admin(self, path: str, json: Any | None = None) -> Any:
         r = await self._http.put(f"{settings.gateway_base_url}{path}", auth=self._auth, json=json)
         r.raise_for_status()
         return _maybe_json(r)
 
     # ---- unauthenticated gateway surface ----
-    async def hit_api(self, path: str, client_id: str) -> int:
-        """Send one request through the rate limiter as a given client; return the status code."""
+    async def hit_api(self, path: str, client_id: str) -> tuple[int, bool]:
+        """Send one request through the rate limiter as a given client.
+
+        Returns (status code, blocked) — blocked is True when the gateway refused the request because
+        the client is under a temporary block, not just out of tokens.
+        """
         try:
             r = await self._http.get(f"{settings.gateway_base_url}{path}", headers={"X-Forwarded-For": client_id})
-            return r.status_code
+            return r.status_code, r.headers.get("X-RateGuard-Blocked") == "true"
         except Exception:
-            return 0
+            return 0, False
 
     async def prometheus(self) -> dict[str, float]:
         r = await self._http.get(f"{settings.gateway_base_url}/actuator/prometheus")
@@ -88,7 +97,8 @@ class Gateway:
         return r.json()
 
     async def agent_investigate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        r = await self._http.post(f"{settings.agent_base_url}/anomalies", json=payload)
+        # An investigation includes an LLM call and the outcome wait, so allow well beyond the default.
+        r = await self._http.post(f"{settings.agent_base_url}/anomalies", json=payload, timeout=120.0)
         r.raise_for_status()
         return r.json()
 

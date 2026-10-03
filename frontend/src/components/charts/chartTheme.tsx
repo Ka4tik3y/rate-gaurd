@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react'
 
-export const AXIS = { stroke: '#98a1ae', fontSize: 11 }
-export const GRID = '#eceef2'
+export const AXIS = { stroke: '#9d9381', fontSize: 11 }
+export const GRID = '#e0d6c1'
+// Dusty, low-saturation series colors that sit on cream paper.
 export const COLORS = {
-  allowed: '#15935f',
-  limited: '#b47812',
-  requests: '#2563eb',
-  error: '#d23b47',
-  reject: '#b47812',
-  baseline: '#98a1ae',
+  allowed: '#5f6f45',
+  limited: '#9a7334',
+  requests: '#4f5a63',
+  error: '#9b4a3a',
+  reject: '#9a7334',
+  baseline: '#9d9381',
 }
 
 export function ChartTooltip({

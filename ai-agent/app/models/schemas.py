@@ -44,6 +44,11 @@ class PlannerDecision(BaseModel):
     alert_message: Optional[str] = None
     rationale: str = ""
     confidence: float = 0.0
+    # Human-facing investigation write-up (LLM planners; the heuristic writes a short templated one).
+    summary: str = ""
+    evidence: list[str] = Field(default_factory=list)
+    # Which planner produced this, e.g. "gemini:gemini-3.5-flash" or "heuristic".
+    planner: str = ""
 
 
 class InvestigationResult(BaseModel):
@@ -59,3 +64,5 @@ class InvestigationResult(BaseModel):
     final: str = "NONE"  # KEPT | REVERTED | PENDING | REJECTED | NONE | ERROR
     steps: list[str] = Field(default_factory=list)
     error: Optional[str] = None
+    summary: str = ""
+    planner: str = ""

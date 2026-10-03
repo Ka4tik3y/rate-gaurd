@@ -45,6 +45,9 @@ policy-gate:
   max-actions-per-window: ${POLICY_GATE_MAX_ACTIONS_PER_WINDOW:10}
   action-window-seconds: ${POLICY_GATE_ACTION_WINDOW_SECONDS:3600}
   min-evidence-deviation: ${POLICY_GATE_MIN_EVIDENCE_DEVIATION:2.0}
+  agent-max-capacity: ${POLICY_GATE_AGENT_MAX_CAPACITY:500}
+  agent-override-ttl-seconds: ${POLICY_GATE_AGENT_OVERRIDE_TTL_SECONDS:1800}
+  block-memory-seconds: ${POLICY_GATE_BLOCK_MEMORY_SECONDS:1800}
 admin:
   security:
     # Dev-only placeholders. Override via env in any real deployment.

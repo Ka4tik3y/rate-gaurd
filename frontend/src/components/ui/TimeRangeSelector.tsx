@@ -12,7 +12,7 @@ export function TimeRangeSelector({ value, onChange }: { value: TimeRange; onCha
           aria-pressed={value === r}
           className={cn(
             'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-            value === r ? 'bg-info text-white' : 'text-muted hover:text-fg',
+            value === r ? 'bg-ink text-surface' : 'text-muted hover:text-fg',
           )}
         >
           {r}

@@ -16,7 +16,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       >
         <div className="flex h-14 items-center justify-between gap-2 border-b border-border px-4">
           <div className="flex items-center gap-2">
-            <div className="grid h-7 w-7 place-items-center rounded-lg bg-info/15 text-info">
+            <div className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-surface">
               <ShieldCheck className="h-4 w-4" />
             </div>
             <div className="leading-tight">
@@ -47,7 +47,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         cn(
                           'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors',
                           isActive
-                            ? 'bg-info/15 font-medium text-info'
+                            ? 'bg-surface-3 font-medium text-fg'
                             : 'text-muted hover:bg-surface-2 hover:text-fg',
                         )
                       }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { COLORS } from '@/components/charts/chartTheme'
 import { useNavigate } from 'react-router-dom'
 import { Activity, AlertTriangle, Ban, CheckCircle2, Gauge, Users } from 'lucide-react'
 import type { TimeRange } from '@/config'
@@ -81,13 +82,13 @@ export default function Overview() {
         <Card>
           <CardHeader title="429 Rate" subtitle="Rate-limited share over time" />
           <QueryBoundary query={traffic}>
-            {(d) => <RateChart points={d.points} dataKey="rejectRate" color="#b47812" name="429 rate" />}
+            {(d) => <RateChart points={d.points} dataKey="rejectRate" color={COLORS.reject} name="429 rate" />}
           </QueryBoundary>
         </Card>
         <Card>
           <CardHeader title="Error Rate" subtitle="4xx / 5xx share over time" />
           <QueryBoundary query={traffic}>
-            {(d) => <RateChart points={d.points} dataKey="errorRate" color="#d23b47" name="Error rate" />}
+            {(d) => <RateChart points={d.points} dataKey="errorRate" color={COLORS.error} name="Error rate" />}
           </QueryBoundary>
         </Card>
       </div>

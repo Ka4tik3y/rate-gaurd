@@ -5,6 +5,9 @@ import java.util.List;
 import com.rateguard.policy.ActionType;
 import com.rateguard.policy.ClientClassification;
 import com.rateguard.policy.GateDecision;
+import com.rateguard.policy.PolicyStore;
+
+import reactor.core.publisher.Mono;
 
 /**
  * Request/response DTOs for the admin and agent APIs. Kept separate from domain/internal types so
@@ -42,8 +45,27 @@ public final class Dtos {
 
   // ---- responses ----
 
+  /**
+   * A client's current rate-limit state. {@code overrideTtlSeconds} is how long an agent-set limit
+   * has left (-1 = permanent or none); {@code recentlyBlocked} and {@code agentMaxCapacity} tell the
+   * agent what the Policy Gate will refuse before it proposes anything.
+   */
   public record RateLimitView(String clientId, String policy, long capacity, double refillRate,
-                              boolean blocked, long blockTtlSeconds, ClientClassification classification) {}
+                              boolean blocked, long blockTtlSeconds, ClientClassification classification,
+                              long overrideTtlSeconds, boolean recentlyBlocked, long agentMaxCapacity) {
+
+    public static Mono<RateLimitView> of(String clientId, PolicyStore store, long agentMaxCapacity) {
+      return Mono.zip(
+              store.effectivePolicy(clientId),
+              store.isBlocked(clientId),
+              store.blockTtlSeconds(clientId),
+              store.classification(clientId),
+              store.overrideTtlSeconds(clientId),
+              store.recentlyBlocked(clientId))
+          .map(t -> new RateLimitView(clientId, t.getT1().name(), t.getT1().capacity(),
+              t.getT1().refillRate(), t.getT2(), t.getT3(), t.getT4(), t.getT5(), t.getT6(), agentMaxCapacity));
+    }
+  }
 
   public record GateResponse(GateDecision decision, String actionId, List<String> reasons,
                              Long appliedCapacity, Double appliedRefillRate, Long appliedBlockSeconds) {}

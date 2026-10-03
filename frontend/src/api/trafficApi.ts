@@ -5,9 +5,15 @@ import { mockApi } from '@/mocks/api'
 import { qk } from './queryKeys'
 import type { Anomaly, TrafficSeries } from '@/types'
 
-export interface TrafficTally {
+export interface BlockStatus {
+  clientBlocked: boolean
+  blockRemainingSeconds: number
+}
+
+export interface TrafficTally extends BlockStatus {
   allowed: number
   limited: number
+  blocked: number
   errors: number
   other: number
   total: number
@@ -30,6 +36,29 @@ export function useGenerateTraffic() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.clients({}) })
       qc.invalidateQueries({ queryKey: qk.kpis })
+    },
+  })
+}
+
+// Whether a client is under a temporary block (agent or admin) and how long is left.
+export async function getBlockStatus(clientId: string): Promise<BlockStatus> {
+  if (config.useMocks) return mockApi.blockStatus(clientId)
+  return http<BlockStatus>(config.apiBaseUrl, `/api/admin/clients/${encodeURIComponent(clientId)}/block`)
+}
+
+export async function unblockClient(clientId: string): Promise<BlockStatus> {
+  if (config.useMocks) return mockApi.unblock(clientId)
+  return http<BlockStatus>(config.apiBaseUrl, `/api/admin/clients/${encodeURIComponent(clientId)}/unblock`, {
+    method: 'POST',
+  })
+}
+
+export function useUnblockClient() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: unblockClient,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.clients({}) })
     },
   })
 }

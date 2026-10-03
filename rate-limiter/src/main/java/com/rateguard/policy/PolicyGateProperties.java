@@ -20,12 +20,24 @@ public class PolicyGateProperties {
   private long maxBlockSeconds = 3600;
   /** Minimum gap between two agent actions for the same client, in seconds. */
   private long cooldownSeconds = 60;
-  /** Maximum agent actions per client within {@link #actionWindowSeconds}. */
+  /**
+   * Maximum agent actions per client within {@link #actionWindowSeconds} before further agent limit
+   * changes are refused. Temporary blocks are exempt (they still respect the cooldown).
+   */
   private long maxActionsPerWindow = 10;
   /** Length of the action-rate window, in seconds. */
   private long actionWindowSeconds = 3600;
   /** Minimum evidence deviation (e.g. z-score) required for an agent mutation. */
   private double minEvidenceDeviation = 2.0;
+  /**
+   * Highest capacity the agent may raise a limit to on its own. Stops repeated ±ratio increases
+   * from compounding without bound; an admin can still set anything up to {@link #maxCapacity}.
+   */
+  private long agentMaxCapacity = 500;
+  /** Agent-set limit overrides expire after this many seconds, reverting the client to the default. */
+  private long agentOverrideTtlSeconds = 1800;
+  /** How long a block is remembered: the agent may not raise the limit of a recently blocked client. */
+  private long blockMemorySeconds = 1800;
 
   public double getMaxChangeRatio() { return maxChangeRatio; }
   public void setMaxChangeRatio(double maxChangeRatio) { this.maxChangeRatio = maxChangeRatio; }
@@ -43,4 +55,10 @@ public class PolicyGateProperties {
   public void setActionWindowSeconds(long actionWindowSeconds) { this.actionWindowSeconds = actionWindowSeconds; }
   public double getMinEvidenceDeviation() { return minEvidenceDeviation; }
   public void setMinEvidenceDeviation(double minEvidenceDeviation) { this.minEvidenceDeviation = minEvidenceDeviation; }
+  public long getAgentMaxCapacity() { return agentMaxCapacity; }
+  public void setAgentMaxCapacity(long agentMaxCapacity) { this.agentMaxCapacity = agentMaxCapacity; }
+  public long getAgentOverrideTtlSeconds() { return agentOverrideTtlSeconds; }
+  public void setAgentOverrideTtlSeconds(long agentOverrideTtlSeconds) { this.agentOverrideTtlSeconds = agentOverrideTtlSeconds; }
+  public long getBlockMemorySeconds() { return blockMemorySeconds; }
+  public void setBlockMemorySeconds(long blockMemorySeconds) { this.blockMemorySeconds = blockMemorySeconds; }
 }

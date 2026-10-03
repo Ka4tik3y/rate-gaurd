@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { COLORS } from '@/components/charts/chartTheme'
 import { useNavigate } from 'react-router-dom'
 import type { TimeRange } from '@/config'
 import { useTopEndpoints } from '@/api/dashboardApi'
@@ -56,13 +57,13 @@ export default function Traffic() {
         <Card>
           <CardHeader title="429 Rate" />
           <QueryBoundary query={traffic}>
-            {(d) => <RateChart points={d.points} dataKey="rejectRate" color="#b47812" name="429 rate" />}
+            {(d) => <RateChart points={d.points} dataKey="rejectRate" color={COLORS.reject} name="429 rate" />}
           </QueryBoundary>
         </Card>
         <Card>
           <CardHeader title="Error Rate" />
           <QueryBoundary query={traffic}>
-            {(d) => <RateChart points={d.points} dataKey="errorRate" color="#d23b47" name="Error rate" />}
+            {(d) => <RateChart points={d.points} dataKey="errorRate" color={COLORS.error} name="Error rate" />}
           </QueryBoundary>
         </Card>
       </div>

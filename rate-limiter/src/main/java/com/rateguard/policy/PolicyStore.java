@@ -16,8 +16,20 @@ public interface PolicyStore {
   /** Effective policy for a client: the per-client override if set, otherwise the default. */
   Mono<RateLimitPolicy> effectivePolicy(String clientId);
 
-  /** Persist a per-client limit override. */
+  /** Persist a permanent per-client limit override (clears any expiry left by an earlier override). */
   Mono<Void> setLimit(String clientId, long capacity, double refillRate);
+
+  /** Persist a per-client limit override that expires after {@code ttlSeconds}, reverting to the default. */
+  Mono<Void> setLimit(String clientId, long capacity, double refillRate, long ttlSeconds);
+
+  /** Seconds until the override expires; -1 if it is permanent or there is none. */
+  Mono<Long> overrideTtlSeconds(String clientId);
+
+  /** Remember that the client was blocked, for {@code seconds}. Survives an early unblock. */
+  Mono<Void> rememberBlock(String clientId, long seconds);
+
+  /** True if the client was blocked within its block-memory window. */
+  Mono<Boolean> recentlyBlocked(String clientId);
 
   /** Remove a per-client limit override (revert to default). */
   Mono<Void> clearLimit(String clientId);

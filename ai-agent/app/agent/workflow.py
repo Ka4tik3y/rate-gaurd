@@ -54,8 +54,25 @@ class AgentWorkflow:
         }
 
     async def determine_cause(self, state: AgentState) -> dict[str, Any]:
-        decision = await self._planner.plan(state["anomaly"], state["eval_metrics"], state["policy"])
-        return {"decision": decision, "steps": [f"cause: {decision.cause} -> {decision.action_type} (conf {decision.confidence:.2f})"]}
+        context = {
+            "metric_windows": state.get("metrics_windows", []),
+            "baseline": state.get("baseline", {}),
+            "recent_actions": await self._recent_actions(state["client_id"]),
+        }
+        decision = await self._planner.plan(state["anomaly"], state["eval_metrics"], state["policy"], context)
+        return {"decision": decision, "steps": [
+            f"cause ({decision.planner or 'planner'}): {decision.cause} -> {decision.action_type} "
+            f"(conf {decision.confidence:.2f})"]}
+
+    async def _recent_actions(self, client_id: str) -> list[dict[str, Any]]:
+        """Compact audit history so the planner knows what was already tried on this client."""
+        try:
+            entries = await self._tools.get_action_history(client_id, 8)
+        except Exception:  # history is helpful context, never required
+            return []
+        keep = ("timestamp", "source", "actionType", "decision", "reasons",
+                "previousCapacity", "appliedCapacity", "appliedBlockSeconds")
+        return [{k: e.get(k) for k in keep if e.get(k) is not None} for e in entries or []]
 
     async def generate_action(self, state: AgentState) -> dict[str, Any]:
         """Shape the planner's decision into a concrete, in-bounds candidate (defense in depth)."""
@@ -262,4 +279,6 @@ class AgentWorkflow:
             outcome=final_state.get("outcome", "NA"),
             final=final_state.get("final", "NONE"),
             steps=final_state.get("steps", []),
+            summary=decision.summary if decision else "",
+            planner=decision.planner if decision else "",
         )

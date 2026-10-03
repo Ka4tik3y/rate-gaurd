@@ -50,9 +50,38 @@ public class RedisPolicyStore implements PolicyStore {
 
   @Override
   public Mono<Void> setLimit(String clientId, long capacity, double refillRate) {
-    return redis.opsForHash().putAll(RedisKeys.override(clientId),
-        java.util.Map.of("capacity", Long.toString(capacity), "refillRate", Double.toString(refillRate)))
+    return writeOverride(clientId, capacity, refillRate)
+        .then(redis.persist(RedisKeys.override(clientId)))
         .then();
+  }
+
+  @Override
+  public Mono<Void> setLimit(String clientId, long capacity, double refillRate, long ttlSeconds) {
+    return writeOverride(clientId, capacity, refillRate)
+        .then(redis.expire(RedisKeys.override(clientId), Duration.ofSeconds(ttlSeconds)))
+        .then();
+  }
+
+  private Mono<Boolean> writeOverride(String clientId, long capacity, double refillRate) {
+    return redis.opsForHash().putAll(RedisKeys.override(clientId),
+        java.util.Map.of("capacity", Long.toString(capacity), "refillRate", Double.toString(refillRate)));
+  }
+
+  @Override
+  public Mono<Long> overrideTtlSeconds(String clientId) {
+    return redis.getExpire(RedisKeys.override(clientId))
+        .map(d -> d.isNegative() || d.isZero() ? -1L : d.getSeconds())
+        .defaultIfEmpty(-1L);
+  }
+
+  @Override
+  public Mono<Void> rememberBlock(String clientId, long seconds) {
+    return redis.opsForValue().set(RedisKeys.recentBlock(clientId), "1", Duration.ofSeconds(seconds)).then();
+  }
+
+  @Override
+  public Mono<Boolean> recentlyBlocked(String clientId) {
+    return redis.hasKey(RedisKeys.recentBlock(clientId));
   }
 
   @Override

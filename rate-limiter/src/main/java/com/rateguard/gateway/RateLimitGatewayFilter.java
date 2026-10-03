@@ -20,6 +20,9 @@ import reactor.core.publisher.Mono;
 @Component
 public class RateLimitGatewayFilter implements GlobalFilter, Ordered {
 
+    /** Set to "true" on a 429 caused by a temporary block rather than an empty token bucket. */
+    public static final String BLOCKED_HEADER = "X-RateGuard-Blocked";
+
     private final ClientIdentifierResolver resolver;
     private final RateLimitService service;
     private final TrafficMetricsRecorder metrics;
@@ -62,6 +65,11 @@ public class RateLimitGatewayFilter implements GlobalFilter, Ordered {
         h.set("X-RateLimit-Remaining", Long.toString(d.remaining()));
         if (!d.allowed()) {
             h.set(HttpHeaders.RETRY_AFTER, Long.toString(d.retryAfter()));
+            if (d.blocked()) {
+                // Distinguishes an agent/admin block from ordinary token exhaustion; Retry-After then
+                // carries the seconds left on the block.
+                h.set(BLOCKED_HEADER, "true");
+            }
         }
     }
 

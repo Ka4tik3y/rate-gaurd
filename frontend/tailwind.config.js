@@ -4,35 +4,38 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Surfaces (clean light palette)
-        bg: '#ffffff',
-        surface: '#ffffff',
-        'surface-2': '#f6f7f9',
-        'surface-3': '#eef0f3',
-        border: '#e5e8ec',
-        'border-light': '#d7dbe1',
-        // Text
-        fg: '#1b2330',
-        muted: '#5b6472',
-        faint: '#98a1ae',
-        // Status (readable on white)
-        ok: '#15935f',
-        warn: '#b47812',
-        danger: '#d23b47',
-        info: '#2563eb',
-        'ok-dim': 'rgba(21,147,95,0.10)',
-        'warn-dim': 'rgba(180,120,18,0.12)',
-        'danger-dim': 'rgba(210,59,71,0.10)',
-        'info-dim': 'rgba(37,99,235,0.09)',
+        // Surfaces — cream paper, dusty and warm
+        bg: '#efe8d8',
+        surface: '#f7f2e6',
+        'surface-2': '#ece4d2',
+        'surface-3': '#e3d9c4',
+        border: '#d6cbb3',
+        'border-light': '#c9bc9f',
+        // Text — warm ink
+        fg: '#2f2a22',
+        muted: '#6b6252',
+        faint: '#9d9381',
+        // Status — faded, low-saturation (olive / ochre / brick / slate)
+        ok: '#5f6f45',
+        warn: '#9a7334',
+        danger: '#9b4a3a',
+        info: '#4f5a63',
+        // Primary action — dark ink, not a bright accent
+        ink: '#3a342b',
+        'ok-dim': 'rgba(95,111,69,0.12)',
+        'warn-dim': 'rgba(154,115,52,0.13)',
+        'danger-dim': 'rgba(155,74,58,0.11)',
+        'info-dim': 'rgba(79,90,99,0.10)',
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        sans: ['"IBM Plex Sans"', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        display: ['"Libre Baskerville"', 'Georgia', 'serif'],
       },
       fontSize: {
         '2xs': ['0.6875rem', { lineHeight: '0.875rem' }],
       },
-      borderRadius: { xl: '0.75rem' },
+      borderRadius: { xl: '0.375rem', lg: '0.25rem', md: '0.1875rem' },
       keyframes: {
         'fade-in': { from: { opacity: '0', transform: 'translateY(4px)' }, to: { opacity: '1', transform: 'none' } },
         pulse: { '0%,100%': { opacity: '1' }, '50%': { opacity: '0.4' } },

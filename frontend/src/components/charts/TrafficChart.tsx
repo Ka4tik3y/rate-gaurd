@@ -69,7 +69,7 @@ export function TrafficChart({ data, height = 280 }: { data: TrafficSeries; heig
             y={0}
             r={6}
             fill={a.severity === 'HIGH' ? COLORS.error : COLORS.reject}
-            stroke="#ffffff"
+            stroke="#f7f2e6"
             strokeWidth={2}
             ifOverflow="extendDomain"
             onClick={() => navigate(`/investigations/${a.investigationId}`)}

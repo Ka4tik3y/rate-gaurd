@@ -25,6 +25,11 @@ public final class RedisKeys {
     return "policy:block:{" + clientId + "}";
   }
 
+  /** Present while a client is within its block-memory window (TTL = time remaining). */
+  public static String recentBlock(String clientId) {
+    return "policy:recent-block:{" + clientId + "}";
+  }
+
   public static String classification(String clientId) {
     return "policy:class:{" + clientId + "}";
   }

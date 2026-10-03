@@ -24,7 +24,7 @@ export default function Evaluation() {
                 key={v}
                 onClick={() => setView(v)}
                 aria-pressed={view === v}
-                className={cn('rounded-md px-2.5 py-1 text-xs font-medium capitalize', view === v ? 'bg-info text-white' : 'text-muted hover:text-fg')}
+                className={cn('rounded-md px-2.5 py-1 text-xs font-medium capitalize', view === v ? 'bg-ink text-surface' : 'text-muted hover:text-fg')}
               >
                 {v}
               </button>

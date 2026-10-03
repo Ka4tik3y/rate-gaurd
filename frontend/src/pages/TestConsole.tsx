@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Bot, Send } from 'lucide-react'
-import { useGenerateTraffic } from '@/api/trafficApi'
+import { useQuery } from '@tanstack/react-query'
+import { Activity, Bot, Ban, Send, Unlock } from 'lucide-react'
+import { getBlockStatus, useGenerateTraffic, useUnblockClient } from '@/api/trafficApi'
 import { useInvestigate } from '@/api/investigationApi'
 import { PageHeader, Card, CardHeader } from '@/components/ui/Card'
 import { StatusBadge } from '@/components/ui/StatusBadge'
@@ -25,6 +26,28 @@ function Stat({ n, label, tone }: { n: number; label: string; tone: string }) {
   )
 }
 
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
+/**
+ * Live block status for a client: polls the real block (Redis TTL) and counts down locally between
+ * polls, so the banner disappears exactly when the gateway starts letting the client through again.
+ */
+function useBlockCountdown(clientId: string) {
+  const status = useQuery({
+    queryKey: ['block-status', clientId],
+    queryFn: () => getBlockStatus(clientId),
+    enabled: clientId.trim().length > 0,
+    refetchInterval: 5000,
+  })
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const until = status.data?.clientBlocked ? status.dataUpdatedAt + status.data.blockRemainingSeconds * 1000 : 0
+  return { secondsLeft: Math.max(0, Math.ceil((until - now) / 1000)), refetch: status.refetch }
+}
+
 export default function TestConsole() {
   const { toast } = useToast()
   const traffic = useGenerateTraffic()
@@ -33,6 +56,8 @@ export default function TestConsole() {
   const [client, setClient] = useState('demo-client-1')
   const [count, setCount] = useState(200)
   const [concurrency, setConcurrency] = useState(15)
+  const block = useBlockCountdown(client)
+  const unblock = useUnblockClient()
 
   const [invClient, setInvClient] = useState('demo-client-1')
   const [metric, setMetric] = useState('reject_ratio')
@@ -41,8 +66,23 @@ export default function TestConsole() {
   const sendTraffic = () =>
     traffic.mutate(
       { clientId: client, count, concurrency },
-      { onError: (e) => toast((e as Error).message, 'error'), onSuccess: () => toast('Traffic sent', 'success') },
+      {
+        onError: (e) => toast((e as Error).message, 'error'),
+        onSuccess: (r) => {
+          toast(r.blocked > 0 ? `${client} is blocked — all ${r.blocked} requests refused` : 'Traffic sent', r.blocked > 0 ? 'error' : 'success')
+          block.refetch()
+        },
+      },
     )
+
+  const liftBlock = () =>
+    unblock.mutate(client, {
+      onError: (e) => toast((e as Error).message, 'error'),
+      onSuccess: () => {
+        toast(`${client} unblocked`, 'success')
+        block.refetch()
+      },
+    })
 
   const runInvestigation = () =>
     invest.mutate(
@@ -72,6 +112,20 @@ export default function TestConsole() {
           <CardHeader title="1 · Generate traffic" subtitle="Send a burst through the gateway as one client" />
           <label className="mb-1 block text-xs text-muted">Client ID</label>
           <input className="input" value={client} onChange={(e) => setClient(e.target.value)} />
+          {block.secondsLeft > 0 && (
+            <div className="mt-3 flex items-center gap-3 rounded-lg border border-danger/40 bg-danger-dim px-3 py-2.5">
+              <Ban className="h-4 w-4 shrink-0 text-danger" />
+              <div className="min-w-0 flex-1 text-sm">
+                <div className="font-semibold text-danger">
+                  {client} is blocked · <span className="tabular-nums">{mmss(block.secondsLeft)}</span> left
+                </div>
+                <div className="text-xs text-muted">Every request gets 429 until the block expires.</div>
+              </div>
+              <button className="btn-ghost shrink-0 text-xs" onClick={liftBlock} disabled={unblock.isPending}>
+                <Unlock className="h-3.5 w-3.5" /> {unblock.isPending ? 'Unblocking…' : 'Unblock'}
+              </button>
+            </div>
+          )}
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-xs text-muted">Requests ({count})</label>
@@ -88,9 +142,10 @@ export default function TestConsole() {
           </button>
 
           {traffic.data && (
-            <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Stat n={traffic.data.allowed} label="allowed" tone="text-ok" />
               <Stat n={traffic.data.limited} label="429 limited" tone="text-warn" />
+              <Stat n={traffic.data.blocked ?? 0} label="429 blocked" tone="text-danger" />
               <Stat n={traffic.data.errors} label="5xx" tone="text-danger" />
             </div>
           )}
@@ -142,7 +197,14 @@ export default function TestConsole() {
                   </>
                 )}
               </div>
-              <p className="mt-2 text-xs text-muted">{invest.data.proposal.reason}</p>
+              {invest.data.analysis?.summary ? (
+                <>
+                  <p className="mt-2 text-xs leading-relaxed text-fg">{invest.data.analysis.summary}</p>
+                  <p className="mt-1 font-mono text-2xs text-faint">{invest.data.analysis.planner}</p>
+                </>
+              ) : (
+                <p className="mt-2 text-xs text-muted">{invest.data.proposal.reason}</p>
+              )}
               <Link to={`/investigations/${invest.data.id}`} className="mt-2 inline-flex items-center gap-1 text-xs text-info hover:underline">
                 <Activity className="h-3 w-3" /> View full investigation
               </Link>

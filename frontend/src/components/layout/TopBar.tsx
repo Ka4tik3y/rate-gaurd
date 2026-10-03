@@ -46,7 +46,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
         <Link to="/investigations" className="relative text-muted hover:text-fg" aria-label={`${count} active anomalies`}>
           <Bell className="h-5 w-5" />
           {count > 0 && (
-            <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+            <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-ink px-1 font-mono text-[10px] font-medium text-surface">
               {count}
             </span>
           )}

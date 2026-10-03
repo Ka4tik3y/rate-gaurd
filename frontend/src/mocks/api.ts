@@ -25,6 +25,11 @@ import * as db from './db'
 
 const delay = (ms = 180) => new Promise((r) => setTimeout(r, ms))
 
+// Mock temporary blocks: clientId -> epoch ms when the block expires.
+const mockBlocks = new Map<string, number>()
+const mockBlockRemaining = (clientId: string) =>
+  Math.max(0, Math.ceil(((mockBlocks.get(clientId) ?? 0) - Date.now()) / 1000))
+
 export const mockApi = {
   async getKpis(): Promise<Kpis> {
     await delay()
@@ -267,15 +272,42 @@ export const mockApi = {
   async sendTraffic(input: { clientId: string; count: number }): Promise<{
     allowed: number
     limited: number
+    blocked: number
     errors: number
     other: number
     total: number
+    clientBlocked: boolean
+    blockRemainingSeconds: number
   }> {
     await delay(300)
     const n = input.count
+    const remaining = mockBlockRemaining(input.clientId)
+    if (remaining > 0) {
+      return { allowed: 0, limited: 0, blocked: n, errors: 0, other: 0, total: n, clientBlocked: true, blockRemainingSeconds: remaining }
+    }
     const allowed = Math.min(n, 100 + Math.floor(Math.random() * 20))
     const limited = Math.max(0, n - allowed)
-    return { allowed, limited, errors: 0, other: 0, total: n }
+    // A big burst in mock mode gets the client blocked for 300s, like the live agent does.
+    if (limited > 150) mockBlocks.set(input.clientId, Date.now() + 300_000)
+    const after = mockBlockRemaining(input.clientId)
+    return { allowed, limited, blocked: 0, errors: 0, other: 0, total: n, clientBlocked: after > 0, blockRemainingSeconds: after }
+  },
+
+  async blockStatus(clientId: string): Promise<{ clientBlocked: boolean; blockRemainingSeconds: number }> {
+    await delay(50)
+    const remaining = mockBlockRemaining(clientId)
+    return { clientBlocked: remaining > 0, blockRemainingSeconds: remaining }
+  },
+
+  async resetLimit(clientId: string): Promise<{ decision: string; clientId: string }> {
+    await delay(100)
+    return { decision: 'APPROVED', clientId }
+  },
+
+  async unblock(clientId: string): Promise<{ clientBlocked: boolean; blockRemainingSeconds: number }> {
+    await delay(100)
+    mockBlocks.delete(clientId)
+    return { clientBlocked: false, blockRemainingSeconds: 0 }
   },
 
   async investigate(input: { clientId: string; metric: string; severity: string; window: string }): Promise<Investigation> {

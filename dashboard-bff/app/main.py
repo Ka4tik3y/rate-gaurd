@@ -201,7 +201,7 @@ def _investigation(body: InvestigateBody, result: dict[str, Any], prev_capacity:
         "trigger": body.metric,
         "severity": body.severity,
         "status": "COMPLETED" if final in ("KEPT", "REVERTED") else "MONITORING" if final == "PENDING" else "COMPLETED",
-        "action": _action_label(decision),
+        "action": _applied_label(decision, result.get("gate_decision")),
         "outcome": result.get("outcome", "NA"),
         "finalState": final,
         "startedAt": now,
@@ -226,15 +226,37 @@ def _investigation(body: InvestigateBody, result: dict[str, Any], prev_capacity:
         "simulation": _sim_map(sim) if sim else None,
         "gateDecision": result.get("gate_decision") or "REJECTED",
         "gateReasons": result.get("gate_reasons", []) or [],
+        # The planner's own write-up (an LLM's analysis, or the heuristic's templated one).
+        "analysis": {
+            "planner": decision.get("planner") or result.get("planner") or "",
+            "summary": decision.get("summary") or result.get("summary") or "",
+            "observations": decision.get("evidence") or [],
+            "cause": decision.get("cause") or result.get("cause", ""),
+            "confidence": float(decision.get("confidence") or 0.0),
+        },
     }
+
+
+def _applied_label(decision: dict[str, Any], gate: str | None) -> str:
+    """The action label, marked when the Policy Gate did not apply it (so a refused block never reads as done)."""
+    label = _action_label(decision)
+    if decision.get("action_type") in (None, "NONE", "ALERT"):
+        return label
+    if gate == "REJECTED":
+        return f"{label} — not applied"
+    if gate == "PENDING_APPROVAL":
+        return f"{label} — awaiting approval"
+    return label
 
 
 def _action_label(decision: dict[str, Any]) -> str:
     a = decision.get("action_type", "ALERT")
     if a == "ADJUST_LIMIT":
-        return f"Increase limit → {decision.get('new_capacity', '?')}"
+        return f"Change limit → {decision.get('new_capacity', '?')}"
     if a == "TEMPORARY_BLOCK":
         return f"Temporary block {decision.get('block_seconds', 0)}s"
+    if a == "NONE":
+        return "No action"
     return "Raise alert"
 
 
@@ -363,6 +385,10 @@ async def client_detail(client_id: str) -> dict[str, Any]:
          "actor": "Agent" if a.get("source") == "AGENT" else "Admin", "result": a.get("decision", "APPROVED")}
         for a in (audit if isinstance(audit, list) else [])
     ]
+    try:
+        pol = await gw.get_admin(f"/admin/rate-limits/{client_id}")
+    except Exception:
+        pol = {}
     now = time.time() * 1000
     base = row["requestsPerSec"]
     history = [
@@ -376,9 +402,15 @@ async def client_detail(client_id: str) -> dict[str, Any]:
         "anomalyThreshold": round(max(1.0, row["baseline"]) * 2.5, 1),
         "policy": {
             "policyName": "premium" if row["classification"] == "HIGH_VALUE" else "default",
-            "capacity": row["currentLimit"], "refillRate": round(row["currentLimit"] / 10, 1),
+            "capacity": row["currentLimit"],
+            "refillRate": float(pol.get("refillRate") or round(row["currentLimit"] / 10, 1)),
             "algorithm": "Token Bucket", "status": "BLOCKED" if row["status"] == "BLOCKED" else "ACTIVE",
             "lastModified": int(now), "modifiedBy": "Agent" if actions and actions[0]["actor"] == "Agent" else "Admin",
+            # Real override state: whether a custom limit is set and, for agent limits, when it lapses.
+            "overridden": pol.get("policy") == "override",
+            "expiresInSeconds": int(pol.get("overrideTtlSeconds") or -1),
+            "recentlyBlocked": bool(pol.get("recentlyBlocked")),
+            "defaultCapacity": settings.default_capacity,
         },
         "history": history,
         "recentActions": actions,
@@ -643,13 +675,15 @@ async def generate_traffic(body: TrafficBody) -> dict[str, Any]:
     count = min(body.count, settings.max_traffic_requests)
     concurrency = min(body.concurrency, settings.max_traffic_concurrency)
     path = body.path if body.path.startswith("/api/") else "/api/get"
-    tally = {"allowed": 0, "limited": 0, "errors": 0, "other": 0}
+    tally = {"allowed": 0, "limited": 0, "blocked": 0, "errors": 0, "other": 0}
     sem = asyncio.Semaphore(concurrency)
 
     async def one() -> None:
         async with sem:
-            code = await gw.hit_api(path, body.clientId)
-            if code == 429:
+            code, blocked = await gw.hit_api(path, body.clientId)
+            if code == 429 and blocked:
+                tally["blocked"] += 1
+            elif code == 429:
                 tally["limited"] += 1
             elif 500 <= code < 600:
                 tally["errors"] += 1
@@ -659,8 +693,43 @@ async def generate_traffic(body: TrafficBody) -> dict[str, Any]:
                 tally["other"] += 1
 
     await asyncio.gather(*[one() for _ in range(count)])
-    tally["total"] = count
-    return tally
+    result: dict[str, Any] = {**tally, "total": count}
+    result.update(await _block_status(body.clientId))
+    return result
+
+
+async def _block_status(client_id: str) -> dict[str, Any]:
+    """Whether the client is currently blocked and for how many more seconds (from the real Redis TTL)."""
+    try:
+        pol = await gw.get_admin(f"/admin/rate-limits/{client_id}")
+    except Exception:
+        return {"clientBlocked": False, "blockRemainingSeconds": 0}
+    ttl = int(pol.get("blockTtlSeconds") or 0)
+    blocked = bool(pol.get("blocked")) and ttl > 0
+    return {"clientBlocked": blocked, "blockRemainingSeconds": ttl if blocked else 0}
+
+
+@app.get("/api/admin/clients/{client_id}/block")
+async def block_status(client_id: str) -> dict[str, Any]:
+    _check(client_id)
+    return await _block_status(client_id)
+
+
+@app.post("/api/admin/clients/{client_id}/reset-limit")
+async def reset_limit(client_id: str) -> dict[str, Any]:
+    """Drop any custom (admin or agent) limit so the client goes back to the default. Audited."""
+    _check(client_id)
+    state.register(client_id)
+    return await gw.delete_admin(f"/admin/rate-limits/{client_id}")
+
+
+@app.post("/api/admin/clients/{client_id}/unblock")
+async def unblock(client_id: str) -> dict[str, Any]:
+    """Lift a block early. Goes through the gateway's admin unblock, which is audited."""
+    _check(client_id)
+    state.register(client_id)
+    await gw.post_admin(f"/admin/rate-limits/{client_id}/unblock", {"reason": "unblocked from Test Console"})
+    return await _block_status(client_id)
 
 
 @app.post("/api/admin/agent/investigate")

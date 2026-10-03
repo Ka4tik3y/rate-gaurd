@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     request_timeout_seconds: float = 20.0
 
+    # The gateway's default per-client capacity (shown next to custom limits).
+    default_capacity: int = 100
+
     # Prometheus sampler cadence + history retained for the traffic chart.
     poll_interval_seconds: float = 3.0
     series_points: int = 240

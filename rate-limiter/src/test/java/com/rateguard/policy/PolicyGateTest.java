@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rateguard.audit.AuditEntry;
 import com.rateguard.audit.AuditLog;
+import com.rateguard.domain.RateLimitPolicy;
 
 import reactor.core.publisher.Mono;
 
@@ -82,6 +83,57 @@ class PolicyGateTest {
     ProposedAction tooBig = new ProposedAction(ActionType.ADJUST_LIMIT, ActionSource.ADMIN, "c2",
         "admin", "absurd", null, 10_000_000L, 50.0, null, null);
     assertEquals(GateDecision.REJECTED, gate.evaluate(tooBig).block().decision());
+  }
+
+  @Test
+  void agentLimitIncreasesExpireButAdminLimitsArePermanent() {
+    gate.evaluate(agentAdjust("c1", 140)).block();
+    assertEquals(props.getAgentOverrideTtlSeconds(), store.overrideTtls.get("c1"));
+
+    ProposedAction admin = new ProposedAction(ActionType.ADJUST_LIMIT, ActionSource.ADMIN, "c1",
+        "admin", "pin it", null, 300L, 30.0, null, null);
+    gate.evaluate(admin).block();
+    assertFalse(store.overrideTtls.containsKey("c1"));
+  }
+
+  @Test
+  void agentCannotRaiseAboveItsCeilingEvenWithinTheRatio() {
+    store.overrides.put("c1", new RateLimitPolicy("override", 400, 40, true));
+    PolicyGateResult r = gate.evaluate(agentAdjust("c1", 560)).block(); // +40%, but above 500
+    assertEquals(GateDecision.REJECTED, r.decision());
+    assertTrue(r.reasons().get(0).contains("agent ceiling"));
+    assertEquals(400L, store.overrides.get("c1").capacity());
+  }
+
+  @Test
+  void agentMayStillLowerALimitThatIsAboveTheCeiling() {
+    store.overrides.put("c1", new RateLimitPolicy("override", 2881, 289, true));
+    assertEquals(GateDecision.APPROVED, gate.evaluate(agentAdjust("c1", 2000)).block().decision());
+  }
+
+  @Test
+  void agentCannotRaiseTheLimitOfARecentlyBlockedClient() {
+    ProposedAction block = ProposedAction.temporaryBlock(ActionSource.AGENT, "c1", 300, "abuse", "scraper", STRONG);
+    gate.evaluate(block).block();
+    assertTrue(store.recentlyBlocked.contains("c1"));
+
+    // An early admin unblock does not wipe the memory.
+    gate.adminUnblock("c1", "test").block();
+    store.cooldown.clear();
+
+    PolicyGateResult r = gate.evaluate(agentAdjust("c1", 140)).block();
+    assertEquals(GateDecision.REJECTED, r.decision());
+    assertTrue(r.reasons().get(0).contains("blocked in the last"));
+    assertFalse(store.overrides.containsKey("c1"));
+  }
+
+  @Test
+  void adminResetRemovesTheOverride() {
+    store.overrides.put("c1", new RateLimitPolicy("override", 2881, 289, true));
+    PolicyGateResult r = gate.adminResetLimit("c1", null).block();
+    assertEquals(GateDecision.APPROVED, r.decision());
+    assertFalse(store.overrides.containsKey("c1"));
+    assertEquals(100L, r.appliedCapacity());
   }
 
   @Test
@@ -155,6 +207,24 @@ class PolicyGateTest {
   void actionRateCapBlocksAgentAction() {
     store.actionCounts.put("c1", props.getMaxActionsPerWindow());
     assertEquals(GateDecision.REJECTED, gate.evaluate(agentAdjust("c1", 140)).block().decision());
+  }
+
+  @Test
+  void actionRateCapDoesNotStopABlock() {
+    // The reported bug: a client that kept attacking had used up its hourly actions, so the agent's
+    // block was refused and the client stayed unblocked.
+    store.actionCounts.put("c1", props.getMaxActionsPerWindow());
+    ProposedAction block = ProposedAction.temporaryBlock(ActionSource.AGENT, "c1", 300, "abuse", "scraper", STRONG);
+    assertEquals(GateDecision.APPROVED, gate.evaluate(block).block().decision());
+    assertTrue(store.blocked.contains("c1"));
+  }
+
+  @Test
+  void cooldownStillAppliesToBlocks() {
+    store.cooldown.add("c1");
+    ProposedAction block = ProposedAction.temporaryBlock(ActionSource.AGENT, "c1", 300, "abuse", "scraper", STRONG);
+    assertEquals(GateDecision.REJECTED, gate.evaluate(block).block().decision());
+    assertFalse(store.blocked.contains("c1"));
   }
 
   @Test
