@@ -32,8 +32,9 @@ export default function Simulation() {
   const { toast } = useToast()
   const [clientId, setClientId] = useState('client-101')
   const [windowMinutes, setWindowMinutes] = useState(10)
-  const [currentCapacity, setCurrentCapacity] = useState(100)
   const [proposedCapacity, setProposedCapacity] = useState(150)
+  // The baseline is the client's real limit, not a user input — the backend simulates against it.
+  const currentCapacity = clients.data?.rows.find((c) => c.clientId === clientId)?.currentLimit ?? 100
 
   const run = () => {
     sim.mutate(
@@ -69,14 +70,18 @@ export default function Simulation() {
 
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-xs text-muted">Current (req/s)</label>
-              <input className="input" type="number" min={1} value={currentCapacity} onChange={(e) => setCurrentCapacity(Number(e.target.value))} />
+              <label className="mb-1 block text-xs text-muted">Current limit</label>
+              <input className="input bg-surface-2 text-muted" type="number" value={currentCapacity} readOnly title="The client's real limit" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-muted">Proposed (req/s)</label>
+              <label className="mb-1 block text-xs text-muted">Proposed limit</label>
               <input className="input" type="number" min={1} value={proposedCapacity} onChange={(e) => setProposedCapacity(Number(e.target.value))} />
             </div>
           </div>
+          <p className="mt-2 text-xs text-faint">
+            Current = what the gateway really allowed and rejected. Simulated = the same traffic, minute by minute,
+            with the proposed limit.
+          </p>
 
           <button className="btn-primary mt-4 w-full" onClick={run} disabled={sim.isPending}>
             <FlaskConical className="h-4 w-4" />
@@ -99,13 +104,26 @@ export default function Simulation() {
           {sim.data && !sim.isPending && (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
-                <Column title="Current" sim={sim.data} kind="current" />
+                <Column title="Current (observed)" sim={sim.data} kind="current" />
                 <Column title="Simulated" sim={sim.data} kind="simulated" />
               </div>
-              <div className="my-4 rounded-lg border border-ok/40 bg-ok-dim px-4 py-3 text-center">
-                <span className="text-sm text-muted">429 reduction</span>
-                <span className="ml-3 text-2xl font-bold text-ok">{pct(sim.data.rejectReductionPct, 0)}</span>
-              </div>
+              {sim.data.rejectReductionPct < 0 ? (
+                <div className="my-4 rounded-lg border border-warn/40 bg-warn-dim px-4 py-3 text-center">
+                  <span className="text-sm text-muted">429 increase</span>
+                  <span className="ml-3 text-2xl font-bold text-warn">{pct(-sim.data.rejectReductionPct, 0)}</span>
+                </div>
+              ) : (
+                <div className="my-4 rounded-lg border border-ok/40 bg-ok-dim px-4 py-3 text-center">
+                  <span className="text-sm text-muted">429 reduction</span>
+                  <span className="ml-3 text-2xl font-bold text-ok">{pct(sim.data.rejectReductionPct, 0)}</span>
+                </div>
+              )}
+              {sim.data.currentRejected === 0 && sim.data.simulatedRejected === 0 && (
+                <p className="mb-3 text-center text-xs text-muted">
+                  No 429s in this window, so a bigger limit has nothing to recover. Generate traffic in the Test Console first,
+                  or pick a shorter window.
+                </p>
+              )}
               <SimulationComparison sim={sim.data} />
             </>
           )}

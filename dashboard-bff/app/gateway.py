@@ -81,6 +81,12 @@ class Gateway:
         except Exception:
             return None
 
+    async def agent_auto_investigations(self) -> list[dict[str, Any]]:
+        """Investigations the agent's autopilot ran on its own (newest first)."""
+        r = await self._http.get(f"{settings.agent_base_url}/investigations")
+        r.raise_for_status()
+        return r.json()
+
     async def agent_investigate(self, payload: dict[str, Any]) -> dict[str, Any]:
         r = await self._http.post(f"{settings.agent_base_url}/anomalies", json=payload)
         r.raise_for_status()

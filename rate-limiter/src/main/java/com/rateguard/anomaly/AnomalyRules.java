@@ -75,7 +75,11 @@ public class AnomalyRules {
 
   private AnomalyEvent ratioEvent(WindowMetrics m, String metric, double value, double threshold, String reason) {
     Severity severity = value >= 2 * threshold ? Severity.HIGH : Severity.MEDIUM;
-    return new AnomalyEvent(m.clientId(), Instant.now(), metric, value, threshold, value, severity,
+    // Evidence strength on the same scale as the EWMA z-score the Policy Gate checks: exactly at the
+    // threshold = 2.0 (the conventional evidence floor), twice the threshold = 4.0. Reporting the raw
+    // ratio (0..1) here would make every ratio anomaly fail the gate's evidence check.
+    double deviation = threshold > 0 ? 2.0 * value / threshold : value;
+    return new AnomalyEvent(m.clientId(), Instant.now(), metric, value, threshold, deviation, severity,
         m.window(), reason);
   }
 }

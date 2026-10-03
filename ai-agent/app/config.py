@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     outcome_wait_seconds: float = 10.0
     evaluation_window_minutes: int = 5
 
+    # Autopilot: poll the detector's anomalies and investigate them without a manual trigger.
+    auto_investigate: bool = True
+    auto_poll_interval_seconds: float = 15.0
+    # Don't re-investigate the same client more often than this (the gate has its own cooldown too).
+    auto_cooldown_seconds: float = 120.0
+    auto_history_size: int = 50
+
     def resolved_provider(self) -> str:
         if self.llm_provider == "auto":
             return "anthropic" if self.anthropic_api_key else "heuristic"

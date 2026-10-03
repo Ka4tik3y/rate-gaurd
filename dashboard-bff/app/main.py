@@ -48,7 +48,39 @@ async def _poller() -> None:
             state.add_sample(await gw.prometheus())
         except Exception:
             pass
+        try:
+            _merge_auto_investigations(await gw.agent_auto_investigations())
+        except Exception:
+            pass  # agent down -> the dashboard just shows what it already has
         await asyncio.sleep(settings.poll_interval_seconds)
+
+
+def _merge_auto_investigations(entries: list[dict[str, Any]]) -> None:
+    """Fold the agent autopilot's investigations into the dashboard's investigation store."""
+    known = {i["id"] for i in state.investigations}
+    added = False
+    for e in entries or []:
+        if e.get("id") in known:
+            continue
+        a = e.get("anomaly") or {}
+        result = e.get("result") or {}
+        body = InvestigateBody(
+            clientId=a.get("clientId", "unknown"), metric=a.get("metric", "anomaly"),
+            severity=a.get("severity", "MEDIUM"), window=a.get("window", "5m"),
+            currentValue=float(a.get("currentValue") or 0), baseline=float(a.get("baseline") or 0),
+            deviation=float(a.get("deviation") or 0), reason=a.get("reason", ""),
+        )
+        prev = int(((result.get("simulation") or {}).get("currentCapacity")) or 100)
+        inv = _investigation(body, result, prev)
+        inv["id"] = e["id"]
+        inv["startedAt"] = int(e.get("startedAt") or inv["startedAt"])
+        inv["trigger"] = f"auto · {body.metric}"
+        state.register(body.clientId)
+        state.investigations.append(inv)
+        added = True
+    if added:
+        state.investigations.sort(key=lambda i: i["startedAt"], reverse=True)
+        del state.investigations[50:]
 
 
 app = FastAPI(title="SentinelFlow BFF", lifespan=lifespan)
@@ -497,11 +529,15 @@ async def investigation(inv_id: str) -> dict[str, Any]:
 async def simulate(client_id: str, body: dict[str, Any]) -> dict[str, Any]:
     _check(client_id)
     state.register(client_id)
-    payload = {
-        "proposedCapacity": body.get("proposedCapacity"),
-        "proposedRefillRate": body.get("proposedRefillRate", round(float(body.get("proposedCapacity", 100)) / 10, 2)),
-        "windowMinutes": body.get("windowMinutes", 5),
+    # Field names must match the gateway's SimulateRequest (capacity / refillRate / windowMinutes).
+    # Refill is left out unless the caller sets it, so only capacity changes and the gateway keeps
+    # the client's current refill rate.
+    payload: dict[str, Any] = {
+        "capacity": int(body.get("proposedCapacity") or 100),
+        "windowMinutes": int(body.get("windowMinutes") or 5),
     }
+    if body.get("proposedRefillRate") is not None:
+        payload["refillRate"] = float(body["proposedRefillRate"])
     sim = await gw.post_admin(f"/admin/rate-limits/{client_id}/simulate", payload)
     return _sim_map(sim)
 

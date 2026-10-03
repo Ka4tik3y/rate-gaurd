@@ -46,6 +46,10 @@ class GatewayClient:
             raise GatewayError(f"POST {path} failed: {e}") from e
 
     # ---- reads ----
+    async def get_anomalies(self) -> list[dict[str, Any]]:
+        """Recent detector anomalies, newest first (the autopilot's input)."""
+        return await self._get("/agent/anomalies")
+
     async def get_metrics(self, client_id: str) -> list[dict[str, Any]]:
         return await self._get(f"/agent/metrics/{client_id}")
 

@@ -1,5 +1,7 @@
 package com.rateguard.metrics;
 
+import java.util.List;
+
 import org.springframework.stereotype.Service;
 
 import reactor.core.publisher.Flux;
@@ -25,6 +27,11 @@ public class MetricsAggregator {
             repository.buckets(clientId, minutes),
             repository.uniqueEndpoints(clientId, minutes))
         .map(t -> WindowMetrics.from(clientId, minutes, t.getT1(), t.getT2()));
+  }
+
+  /** Raw per-minute buckets for one client over the last {@code minutes}, oldest first, zero-padded. */
+  public Mono<List<MinuteBucket>> buckets(String clientId, int minutes) {
+    return repository.buckets(clientId, minutes);
   }
 
   /** Clients that recorded any traffic within the last {@code withinMinutes}. */

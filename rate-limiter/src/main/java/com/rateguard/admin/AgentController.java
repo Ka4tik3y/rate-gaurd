@@ -16,6 +16,8 @@ import com.rateguard.admin.dto.Dtos.GateResponse;
 import com.rateguard.admin.dto.Dtos.MetricsView;
 import com.rateguard.admin.dto.Dtos.RateLimitView;
 import com.rateguard.admin.dto.Dtos.SimulateRequest;
+import com.rateguard.anomaly.AnomalyEvent;
+import com.rateguard.anomaly.AnomalyEventSink;
 import com.rateguard.audit.AuditEntry;
 import com.rateguard.audit.AuditLog;
 import com.rateguard.metrics.MetricsAggregator;
@@ -48,15 +50,27 @@ public class AgentController {
   private final MetricsProperties metricsProperties;
   private final SimulationService simulation;
   private final AuditLog auditLog;
+  private final AnomalyEventSink anomalySink;
 
   public AgentController(PolicyGate gate, PolicyStore store, MetricsAggregator aggregator,
-                        MetricsProperties metricsProperties, SimulationService simulation, AuditLog auditLog) {
+                        MetricsProperties metricsProperties, SimulationService simulation, AuditLog auditLog,
+                        AnomalyEventSink anomalySink) {
     this.gate = gate;
     this.store = store;
     this.aggregator = aggregator;
     this.metricsProperties = metricsProperties;
     this.simulation = simulation;
     this.auditLog = auditLog;
+    this.anomalySink = anomalySink;
+  }
+
+  /**
+   * Recent anomaly events from the deterministic detector, newest first. The agent polls this to
+   * investigate autonomously — a pull model, so the rate limiter never calls (or depends on) the AI.
+   */
+  @GetMapping("/anomalies")
+  public List<AnomalyEvent> anomalies() {
+    return anomalySink.recent();
   }
 
   @PostMapping("/actions")
